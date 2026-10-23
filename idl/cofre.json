@@ -782,9 +782,11 @@
     {
       "name": "liquidar_partida",
       "docs": [
-        "O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B). Contas restantes: para CADA jogador,",
-        "na ordem da partida, o cofre e a conta de tokens dele (2 por jogador). Cada perdedor perde a aposta e",
-        "cada vencedor ganha uma aposta; no empate todos recebem de volta. Nada sai do grupo de jogadores."
+        "O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B) e, se houver, quem ABANDONOU a partida (bit i =",
+        "jogador i). Contas restantes: para CADA jogador, na ordem da partida, o cofre e a conta de tokens dele (2 por jogador);",
+        "com abandono, por ultimo, a conta de tokens da carteira de taxas. Cada perdedor perde a aposta e cada vencedor ganha",
+        "uma aposta; no empate todos recebem de volta. Pool de abandono: quem abandonou nao recebe nada; o que ele receberia",
+        "vai para a carteira de taxas; os outros recebem o mesmo."
       ],
       "discriminator": [
         147,
@@ -813,7 +815,8 @@
                 ]
               }
             ]
-          }
+          },
+          "writable": true
         },
         {
           "name": "partida",
@@ -863,6 +866,12 @@
         {
           "name": "resultado",
           "type": "u8"
+        },
+        {
+          "name": "abandonos",
+          "type": {
+            "option": "u8"
+          }
         }
       ]
     },
@@ -1419,6 +1428,11 @@
       "code": 6021,
       "name": "CofreCheio",
       "msg": "Deposito passaria do teto total do cofre"
+    },
+    {
+      "code": 6022,
+      "name": "AbandonoInvalido",
+      "msg": "Abandono invalido: so jogadores da partida e nunca todos"
     }
   ],
   "types": [

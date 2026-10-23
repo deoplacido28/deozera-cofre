@@ -13,7 +13,7 @@ O código está público para que qualquer pessoa confira **o que o programa faz
 - **Saque:** só o dono do cofre saca, e só para uma conta dele. O saque funciona até com o programa pausado.
 - **Aposta:** só trava com a assinatura do dono ou de uma "chave de aposta" que ele autorizou pela própria carteira. Essa chave só trava aposta: não saca, não transfere e o dono revoga quando quiser.
 - **Saldo trancado:** o dono pode trancar o saldo pela carteira; trancado, nenhuma chave de aposta aposta.
-- **Árbitro (servidor):** só cria a partida e informa o resultado. O valor travado se move apenas entre os jogadores daquela partida, nunca para fora. Aposta tem teto.
+- **Árbitro (servidor):** só cria a partida e informa o resultado e quem abandonou. O valor travado se move entre os jogadores daquela partida; a única saída é a **pool de abandono**: o que quem abandonou receberia vai para a carteira de taxas (nunca mais que a parte dele, nunca todos os jogadores; os outros recebem o mesmo). Aposta tem teto.
 - **Prazos:** se o resultado não for informado em 24 h (ou a partida não encher em 10 min), qualquer pessoa cancela e todos recebem de volta.
 - **Taxa:** só no saque, com teto fixo de 20% no código, e só para a carteira de taxas configurada.
 - **Moeda:** USDC, gravada na inicialização e imutável.

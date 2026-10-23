@@ -193,7 +193,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
           const ordem = [...p.a, ...p.b];
           const antes = await Promise.all(ordem.map((x) => cofre(x.publicKey)));
           const contas = ordem.flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
-          const ok = await tentar(program.methods.liquidarPartida(resultado)
+          const ok = await tentar(program.methods.liquidarPartida(resultado, null)
             .accountsPartial({ partida: partidaDe(p.id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
             .remainingAccounts(contas).signers([arbitro]).rpc());
           if (ok) {
@@ -255,7 +255,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
           const p = sorteia(abertas());
           if (p) {
             const contas = [...p.a, ...p.b].flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
-            await deveFalhar('liquidar como arbitro falso', program.methods.liquidarPartida(1)
+            await deveFalhar('liquidar como arbitro falso', program.methods.liquidarPartida(1, null)
               .accountsPartial({ partida: partidaDe(p.id), arbitro: atacante.publicKey, pagador: arbitro.publicKey })
               .remainingAccounts(contas).signers([atacante]).rpc());
           }

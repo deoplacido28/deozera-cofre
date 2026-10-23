@@ -18,7 +18,7 @@ Documento para pedir orçamentos de auditoria independente do programa Solana `c
 1. **Saque:** só o dono, só para uma conta de tokens dele; funciona mesmo com o programa pausado.
 2. **Aposta:** só trava com a assinatura do dono **ou** de uma chave de aposta que o dono autorizou pela wallet. A chave só trava aposta: não saca, não transfere, não tranca. `entrar_partida_sessao` exige o valor exato da partida (`ApostaDiferente`).
 3. **Saldo trancado:** só o dono tranca e destranca; trancado, nenhuma chave de aposta aposta.
-4. **Árbitro (servidor):** cria partidas e informa o resultado; o valor travado só se move entre os jogadores daquela partida; aposta com teto (`teto_aposta`). Não saca nem trava aposta de ninguém.
+4. **Árbitro (servidor):** cria partidas e informa o resultado e quem abandonou; o valor travado só se move entre os jogadores daquela partida, com uma única saída: a **pool de abandono** (o que quem abandonou receberia vai para a conta de tokens da carteira de taxas configurada; nunca mais que a parte dele, nunca todos os jogadores; os outros recebem o mesmo). Aposta com teto (`teto_aposta`). Não saca nem trava aposta de ninguém. Risco aceito: um árbitro comprometido poderia marcar abandono falso e mandar a parte de alguém para a carteira de taxas (limitado à aposta daquela partida; cada caso fica público na transação e na pool).
 5. **Prazos:** se o árbitro não liquidar em 24 h (ou a partida não encher em 10 min), qualquer um cancela e todos recebem de volta.
 6. **Taxa:** só no saque, teto fixo de 20% no código, só para a conta de tokens da carteira de taxas configurada.
 7. **Tetos de depósito (opcionais, 0 = sem teto):** por cofre e total; só barram depósito, nunca saque, aposta ou pagamento.

@@ -161,7 +161,7 @@ describe('cofre', () => {
     await falha(program.methods.entrarPartida().accountsPartial({ partida, jogador: carol.publicKey }).signers([carol]).rpc(), 'NaoEstaNaPartida');
     await program.methods.entrarPartida().accountsPartial({ partida, jogador: alice.publicKey }).signers([alice]).rpc();
     await falha(program.methods.entrarPartida().accountsPartial({ partida, jogador: alice.publicKey }).signers([alice]).rpc(), 'JaEntrou');
-    await falha(program.methods.liquidarPartida(1).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+    await falha(program.methods.liquidarPartida(1, null).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
       .remainingAccounts(pares([alice.publicKey, bob.publicKey])).signers([arbitro]).rpc(), 'EstadoInvalido');
     await program.methods.entrarPartida().accountsPartial({ partida, jogador: bob.publicKey }).signers([bob]).rpc();
     expect((await cofre(alice.publicKey)).travado.toString()).to.equal(USDC(5).toString());
@@ -169,7 +169,7 @@ describe('cofre', () => {
 
   it('so o arbitro liquida, com as contas certas, e o dinheiro fica entre os jogadores', async () => {
     const partida = partidaDe(1);
-    const liquidar = (quem: anchor.web3.Keypair, contas: ReturnType<typeof pares>) => program.methods.liquidarPartida(1)
+    const liquidar = (quem: anchor.web3.Keypair, contas: ReturnType<typeof pares>) => program.methods.liquidarPartida(1, null)
       .accountsPartial({ partida, arbitro: quem.publicKey, pagador: arbitro.publicKey }).remainingAccounts(contas).signers([quem]).rpc();
     await falha(liquidar(alice, pares([alice.publicKey, bob.publicKey])), 'NaoAutorizado');
     await falha(liquidar(arbitro, pares([bob.publicKey, alice.publicKey])), 'ContasInvalidas'); // ordem errada
@@ -257,9 +257,9 @@ describe('cofre', () => {
     await program.methods.criarPartida(new BN(3), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     const partida = partidaDe(3);
     for (const k of [alice, bob]) await program.methods.entrarPartida().accountsPartial({ partida, jogador: k.publicKey }).signers([k]).rpc();
-    await falha(program.methods.liquidarPartida(0).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: bob.publicKey })
+    await falha(program.methods.liquidarPartida(0, null).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: bob.publicKey })
       .remainingAccounts(pares([alice.publicKey, bob.publicKey])).signers([arbitro]).rpc(), 'ContasInvalidas');
-    await program.methods.liquidarPartida(0).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+    await program.methods.liquidarPartida(0, null).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
       .remainingAccounts(pares([alice.publicKey, bob.publicKey])).signers([arbitro]).rpc();
     expect((await cofre(alice.publicKey)).saldo.toString()).to.equal(USDC(15).toString()); // empate: devolvido
   });
@@ -378,5 +378,55 @@ describe('cofre', () => {
     await falha(program.methods.aceitarAdmin().accountsPartial({ config, novoAdmin: alice.publicKey }).signers([alice]).rpc(), 'NaoAutorizado');
     await program.methods.aceitarAdmin().accountsPartial({ config, novoAdmin: novo.publicKey }).signers([novo]).rpc();
     expect((await program.account.config.fetch(config)).admin.toBase58()).to.equal(novo.publicKey.toBase58());
+  });
+
+  it('pool de abandono: quem abandona nao recebe; o que receberia vai para a carteira de taxas; os outros recebem igual', async () => {
+    const taxaConta = { pubkey: taxasUsdc, isSigner: false, isWritable: true };
+    const liquidar = (id: number, resultado: number, abandonos: number | null, extra: { pubkey: Chave; isSigner: boolean; isWritable: boolean }[] = [taxaConta]) =>
+      program.methods.liquidarPartida(resultado, abandonos).accountsPartial({ partida: partidaDe(id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+        .remainingAccounts([...pares([alice.publicKey, bob.publicKey]), ...extra]).signers([arbitro]).rpc();
+    const nova = async (id: number, aposta: number) => {
+      await program.methods.criarPartida(new BN(id), USDC(aposta), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+      for (const k of [alice, bob]) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(id), jogador: k.publicKey }).signers([k]).rpc();
+    };
+    const foto = async () => ({
+      a: (await cofre(alice.publicKey)).saldo.toNumber(), b: (await cofre(bob.publicKey)).saldo.toNumber(), t: await usdc(taxasUsdc),
+      tokens: (await usdc(tokensDe(alice.publicKey))) + (await usdc(tokensDe(bob.publicKey))),
+      total: (await program.account.config.fetch(config)).totalNoCofre.toNumber(),
+    });
+
+    // 1. Alice (time A) abandona e o time A vence: ela nao recebe nada; a pool recebe 2x a aposta; Bob perde como sempre
+    const antes1 = await foto();
+    await nova(20, 2);
+    await falha(liquidar(20, 1, 0b01, []), 'ContasInvalidas'); // sem a conta da carteira de taxas
+    await falha(liquidar(20, 1, 0b01, [{ ...taxaConta, pubkey: ata[carol.publicKey.toBase58()] }]), 'CarteiraDeTaxasErrada'); // desviar para outro
+    await falha(liquidar(20, 1, 0b100), 'AbandonoInvalido'); // quem nao esta na partida
+    await falha(liquidar(20, 1, 0b11), 'AbandonoInvalido'); // todos abandonaram
+    await liquidar(20, 1, 0b01);
+    const depois1 = await foto();
+    expect(depois1.a - antes1.a).to.equal(-2_000_000); // perdeu a propria aposta (nao recebeu nada)
+    expect(depois1.b - antes1.b).to.equal(-2_000_000); // perdeu a aposta, como em qualquer derrota
+    expect(depois1.t - antes1.t).to.equal(4_000_000); // pool: a aposta dela + o premio
+    expect(antes1.tokens - depois1.tokens).to.equal(4_000_000); // os tokens acompanham a contabilidade
+    expect(antes1.total - depois1.total).to.equal(4_000_000); // saiu do programa
+
+    // 2. Empate com abandono do Bob: Alice recebe a dela de volta; a aposta do Bob vai para a pool
+    const antes2 = await foto();
+    await nova(21, 1);
+    await liquidar(21, 0, 0b10);
+    const depois2 = await foto();
+    expect(depois2.a - antes2.a).to.equal(0);
+    expect(depois2.b - antes2.b).to.equal(-1_000_000);
+    expect(depois2.t - antes2.t).to.equal(1_000_000);
+
+    // 3. Bob abandona e o time dele perde: igual a uma derrota normal; a pool nao recebe nada
+    const antes3 = await foto();
+    await nova(22, 1);
+    await liquidar(22, 1, 0b10);
+    const depois3 = await foto();
+    expect(depois3.a - antes3.a).to.equal(1_000_000);
+    expect(depois3.b - antes3.b).to.equal(-1_000_000);
+    expect(depois3.t - antes3.t).to.equal(0);
+    expect(depois3.tokens).to.equal(antes3.tokens);
   });
 });

@@ -9,8 +9,11 @@
 //!    autorizou com a propria carteira (fica no navegador dele; so trava aposta em partida, nunca saca nem
 //!    transfere, e o jogador revoga quando quiser). O servidor sozinho nao trava aposta de ninguem.
 //!    "Saldo trancado" (so o dono tranca e destranca, pela wallet): nenhuma chave de aposta aposta.
-//! 4. O arbitro (servidor) so informa o resultado: o valor travado se move apenas entre os jogadores
-//!    daquela partida, nunca para fora; aposta tem teto.
+//! 4. O arbitro (servidor) so informa o resultado e quem abandonou: o valor travado se move entre os jogadores
+//!    daquela partida; a unica saida e a pool de abandono (4b). Aposta tem teto.
+//! 4b. Pool de abandono: quem abandona a partida nao recebe nada dela. O que ele receberia (a propria aposta de
+//!     volta e, se o time venceu, o premio) vai para a carteira de taxas. Os outros jogadores recebem exatamente o
+//!     mesmo que receberiam sem o abandono. Nunca mais que a parte dele; nunca todos os jogadores da partida.
 //! 5. Se o arbitro nao liquidar no prazo, qualquer um pode cancelar e cada jogador recebe a aposta de volta.
 //! 6. A taxa e cobrada so no saque, com teto fixo no codigo, e vai para a carteira de taxas configurada.
 //! 6b. Tetos opcionais de deposito (para testes e beta; 0 = sem teto): saldo por cofre e total guardado no programa.
@@ -136,6 +139,7 @@ enum Erro {
     SaldoTrancado,
     AcimaDoTetoDeSaldo,
     CofreCheio,
+    AbandonoInvalido,
 }
 impl From<Erro> for ProgramError {
     fn from(e: Erro) -> Self {
@@ -182,6 +186,8 @@ impl<'a> Leitor<'a> {
     fn fim(&self) -> ProgramResult {
         if self.i == self.d.len() { Ok(()) } else { Err(ProgramError::InvalidInstructionData) }
     }
+    /// Ja leu tudo? (campos opcionais no fim, que versoes antigas do servidor nao mandam)
+    fn acabou(&self) -> bool { self.i == self.d.len() }
 }
 
 fn ler_u64(d: &[u8], i: usize) -> u64 { u64::from_le_bytes(arr(&d[i..i + 8])) }
@@ -823,44 +829,77 @@ fn travar_aposta(config: &AccountInfo, partida: &AccountInfo, cofre: &AccountInf
     Ok(())
 }
 
-/// O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B). Contas restantes: para CADA jogador,
-/// na ordem da partida, o cofre e a conta de tokens dele (2 por jogador). Cada perdedor perde a aposta e
-/// cada vencedor ganha uma aposta; no empate todos recebem de volta. Nada sai do grupo de jogadores.
+/// O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B) e, se houver, quem ABANDONOU a partida
+/// (Option<u8>: bit i = jogador i, na ordem da partida; versoes antigas do servidor nao mandam). Contas restantes:
+/// para CADA jogador, na ordem da partida, o cofre e a conta de tokens dele (2 por jogador); com abandono, por
+/// ultimo, a conta de tokens da carteira de taxas (e a configuracao gravavel: o total guardado diminui). Cada perdedor perde a aposta e cada vencedor ganha uma aposta;
+/// no empate todos recebem de volta. Pool de abandono (regra 4b): quem abandonou nao recebe nada; o que ele
+/// receberia vai para a carteira de taxas; os outros recebem o mesmo. Fora isso, nada sai do grupo de jogadores.
 fn liquidar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
     let [config, partida, arbitro, pagador, programa_token, restantes @ ..] = contas else { return Err(ProgramError::NotEnoughAccountKeys) };
     let resultado = args.u8()?;
+    let abandonos = if args.acabou() { 0 } else if args.tem()? { args.u8()? } else { 0 };
     args.fim()?;
-    let cfg = ler_config(config)?;
+    let mut cfg = ler_config(config)?;
     exigir(arbitro.is_signer() && arbitro.key() == &cfg.arbitro, Erro::NaoAutorizado)?;
     let p = ler_partida(partida)?;
     exigir(pagador.key() == &p.pagador, Erro::ContasInvalidas)?;
     conferir_programa(programa_token, &TOKEN)?;
     exigir(resultado <= 2, Erro::ResultadoInvalido)?;
     exigir(p.estado == TRAVADA, Erro::EstadoInvalido)?;
-    exigir(restantes.len() == 2 * p.n, Erro::ContasInvalidas)?;
+    // Abandono: so jogadores desta partida e nunca todos (todo mundo saindo nao tem resultado: o servidor cancela)
+    exigir((abandonos as u32) >> p.n == 0 && (abandonos.count_ones() as usize) < p.n, Erro::AbandonoInvalido)?;
+    let com_abandono = abandonos != 0;
+    exigir(restantes.len() == 2 * p.n + com_abandono as usize, Erro::ContasInvalidas)?;
+    let taxas = if com_abandono {
+        let t = &restantes[2 * p.n];
+        conferir_conta_de(t, &cfg.carteira_taxas, &cfg.moeda, Erro::CarteiraDeTaxasErrada)?;
+        Some(t)
+    } else { None };
+    let abandonou = |i: usize| abandonos & (1u8 << i) != 0;
+    let venceu = |i: usize| { let do_a = i < p.por_time; (resultado == 1 && do_a) || (resultado == 2 && !do_a) };
 
     // 1. Contabilidade: confere cada cofre e a conta de tokens dele e atualiza os saldos
     let mut bumps = [0u8; 2 * MAX_POR_TIME];
+    let mut para_pool: u64 = 0;
     for i in 0..p.n {
         let (cofre, tokens) = (&restantes[2 * i], &restantes[2 * i + 1]);
         exigir(cofre.is_writable(), Erro::ContasInvalidas)?;
         let mut c = ler_cofre(cofre, &p.jogadores[i], Erro::ContasInvalidas)?;
         conferir_tokens_do_cofre(tokens, &p.jogadores[i], c.bump_tokens)?;
-        let do_a = i < p.por_time;
         c.travado = c.travado.checked_sub(p.aposta).ok_or(Erro::Overflow)?;
-        let venceu = (resultado == 1 && do_a) || (resultado == 2 && !do_a);
-        let ganho = if resultado == 0 { p.aposta } else if venceu { p.aposta.checked_mul(2).ok_or(Erro::Overflow)? } else { 0 };
-        c.saldo = c.saldo.checked_add(ganho).ok_or(Erro::Overflow)?;
+        let ganho = if resultado == 0 { p.aposta } else if venceu(i) { p.aposta.checked_mul(2).ok_or(Erro::Overflow)? } else { 0 };
+        // Quem abandonou nao recebe: a parte dele vai para a pool de abandono
+        if abandonou(i) { para_pool = para_pool.checked_add(ganho).ok_or(Erro::Overflow)?; }
+        else { c.saldo = c.saldo.checked_add(ganho).ok_or(Erro::Overflow)?; }
         gravar_saldos(cofre, &c)?;
         bumps[i] = c.bump;
     }
-    // 2. Tokens: cada perdedor manda a aposta para o vencedor correspondente (times do mesmo tamanho)
+    // O que vai para a pool sai do programa: o total guardado diminui
+    if para_pool > 0 && cfg.com_tetos {
+        exigir(config.is_writable(), Erro::ContasInvalidas)?; // com abandono a configuracao vem gravavel
+        cfg.total_no_cofre = cfg.total_no_cofre.saturating_sub(para_pool);
+        gravar_config(config, &cfg)?;
+    }
+    // 2. Tokens: cada perdedor manda a aposta para o vencedor correspondente (times do mesmo tamanho); se esse
+    //    vencedor abandonou, para a pool
     if resultado != 0 {
         let (perdedores, vencedores) = if resultado == 1 { (p.por_time..p.n, 0..p.por_time) } else { (0..p.por_time, p.por_time..p.n) };
         for (l, w) in perdedores.zip(vencedores) {
             let b = [bumps[l]];
             let sementes = [Seed::from(b"cofre"), Seed::from(&p.jogadores[l]), Seed::from(&b)];
-            Transfer { from: &restantes[2 * l + 1], to: &restantes[2 * w + 1], authority: &restantes[2 * l], amount: p.aposta }
+            let destino = if abandonou(w) { taxas.ok_or(Erro::ContasInvalidas)? } else { &restantes[2 * w + 1] };
+            Transfer { from: &restantes[2 * l + 1], to: destino, authority: &restantes[2 * l], amount: p.aposta }
+                .invoke_signed(&[Signer::from(&sementes)])?;
+        }
+    }
+    // 3. Pool: quem abandonou e receberia algo (venceu ou empatou) manda a propria aposta para a carteira de taxas
+    if let Some(t) = taxas {
+        for i in 0..p.n {
+            if !abandonou(i) || (resultado != 0 && !venceu(i)) { continue; }
+            let b = [bumps[i]];
+            let sementes = [Seed::from(b"cofre"), Seed::from(&p.jogadores[i]), Seed::from(&b)];
+            Transfer { from: &restantes[2 * i + 1], to: t, authority: &restantes[2 * i], amount: p.aposta }
                 .invoke_signed(&[Signer::from(&sementes)])?;
         }
     }
