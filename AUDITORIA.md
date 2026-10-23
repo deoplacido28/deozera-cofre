@@ -40,8 +40,8 @@ Em toda conta recebida: dono = programa, identificador de 8 bytes, tamanho míni
 ## Plano até o dinheiro real
 1. Congelar o código do contrato (versão desta revisão).
 2. Revisão independente: auditor freelancer ou empresa especialista em Solana (orçamento abaixo). Corrigir achados e pedir a revisão das correções.
-3. **Build verificado** (Solana Verify / OtterSec): o código do repositório é o mesmo que roda na blockchain.
-4. `security.txt` embutido no programa com o contato de segurança.
+3. **Build verificado** (Solana Verify / OtterSec): o código do repositório é o mesmo que roda na blockchain. **Feito na devnet (22/10/2026):** código público em github.com/deoplacido28/deozera-cofre; o GitHub Actions compila na imagem oficial `solana-verifiable-build:2.1.21` (reproduzível: duas rodadas, mesmo hash `549e42d2…f8f6e`) e publica o `.so` como versão; a devnet roda exatamente esse arquivo. Na mainnet falta registrar na OtterSec.
+4. `security.txt` embutido no programa com o contato de segurança. **Feito (22/10/2026):** contato contato@deozera.com.br (ativo), política em deozera.com.br/seguranca e `/.well-known/security.txt` no site.
 5. Autoridade de atualização numa **multiassinatura Squads** do dono.
 6. Beta com tetos baixos (`teto_saldo`, `teto_total`) e depois sem teto.
 7. Página de segurança no site e recompensa por falhas (bug bounty) depois do lançamento.

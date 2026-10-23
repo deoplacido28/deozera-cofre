@@ -6,7 +6,7 @@ O código está público para que qualquer pessoa confira **o que o programa faz
 
 | Rede | Endereço do programa |
 |---|---|
-| Devnet (testes) | `E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX` |
+| Devnet (testes) | `E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX` (roda o build verificável: hash `549e42d27f1bdf713b19732eb6668e88785003379a15d3643782f740a75f8f6e`) |
 | Mainnet | ainda não publicado |
 
 ## O que o programa garante
