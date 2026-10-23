@@ -1,0 +1,17 @@
+[package]
+name = "cofre"
+version = "0.2.0"
+description = "Cofre DeoZERA (Pinocchio): saldos em USDC e apostas dos jogadores"
+edition = "2021"
+rust-version = "1.79"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "cofre"
+
+# Versoes fixas: as mais novas pedem um Rust mais recente que o das ferramentas da Solana instaladas (1.79)
+[dependencies]
+pinocchio = "=0.9.3"
+pinocchio-system = "=0.4.0"
+pinocchio-token = "=0.4.0"
+pinocchio-pubkey = "=0.3.0"

@@ -1,0 +1,1642 @@
+{
+  "address": "E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX",
+  "metadata": {
+    "name": "cofre",
+    "version": "0.2.0",
+    "spec": "0.1.0",
+    "description": "Cofre DeoZERA (Pinocchio). Interface igual a versao Anchor; campos de tamanho variavel no fim das contas."
+  },
+  "instructions": [
+    {
+      "name": "abrir_cofre",
+      "docs": [
+        "O jogador abre o proprio cofre e a conta de tokens dele (paga o aluguel, que volta ao fechar)."
+      ],
+      "discriminator": [
+        135,
+        102,
+        46,
+        42,
+        90,
+        209,
+        217,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokens",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "moeda"
+        },
+        {
+          "name": "dono",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "aceitar_admin",
+      "discriminator": [
+        123,
+        194,
+        221,
+        1,
+        161,
+        101,
+        2,
+        190
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "novo_admin",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "atualizar_config",
+      "docs": [
+        "Admin muda parametros. A taxa nunca passa do teto; pausar NAO bloqueia saques; a moeda nao muda."
+      ],
+      "discriminator": [
+        187,
+        20,
+        118,
+        1,
+        1,
+        187,
+        80,
+        70
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "arbitro",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "carteira_taxas",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "taxa_saque_bps",
+          "type": {
+            "option": "u16"
+          }
+        },
+        {
+          "name": "teto_aposta",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "pausado",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "teto_saldo",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "teto_total",
+          "type": {
+            "option": "u64"
+          }
+        }
+      ]
+    },
+    {
+      "name": "cancelar_partida",
+      "docs": [
+        "Cancela e devolve as apostas travadas. Pode chamar: o arbitro a qualquer momento; qualquer um se a",
+        "partida nao encheu no prazo de entrada; qualquer um se nao foi liquidada no prazo de liquidacao.",
+        "Contas restantes: os cofres dos jogadores que ja entraram, na ordem da partida (os tokens nao se movem)."
+      ],
+      "discriminator": [
+        244,
+        152,
+        123,
+        112,
+        195,
+        139,
+        233,
+        203
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partida",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  100,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partida.id",
+                "account": "Partida"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quem",
+          "signer": true
+        },
+        {
+          "name": "pagador",
+          "writable": true,
+          "relations": [
+            "partida"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "criar_partida",
+      "docs": [
+        "O arbitro cria a partida com os times e o valor por jogador (dentro do teto)."
+      ],
+      "discriminator": [
+        60,
+        76,
+        59,
+        239,
+        194,
+        56,
+        2,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partida",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  100,
+                  97
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "arbitro",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "aposta",
+          "type": "u64"
+        },
+        {
+          "name": "time_a",
+          "type": {
+            "vec": "pubkey"
+          }
+        },
+        {
+          "name": "time_b",
+          "type": {
+            "vec": "pubkey"
+          }
+        }
+      ]
+    },
+    {
+      "name": "depositar",
+      "docs": [
+        "Deposito: USDC sai de uma conta de tokens do dono (que assina) para o cofre dele. Sem taxa."
+      ],
+      "discriminator": [
+        207,
+        16,
+        199,
+        114,
+        220,
+        5,
+        105,
+        219
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          },
+          "writable": true
+        },
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokens",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "origem",
+          "docs": [
+            "De onde sai o USDC: uma conta de tokens do proprio dono, na moeda do cofre."
+          ],
+          "writable": true
+        },
+        {
+          "name": "dono",
+          "signer": true,
+          "relations": [
+            "cofre"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "valor",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "entrar_partida",
+      "docs": [
+        "O jogador trava a propria aposta, assinando com a propria carteira. Sem essa assinatura nada e travado."
+      ],
+      "discriminator": [
+        6,
+        132,
+        168,
+        219,
+        29,
+        171,
+        179,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partida",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  100,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partida.id",
+                "account": "Partida"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "jogador"
+              }
+            ]
+          }
+        },
+        {
+          "name": "jogador",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fechar_cofre",
+      "docs": [
+        "Fecha o cofre vazio: qualquer sobra de tokens (ex.: enviada direto por alguem) vai para o dono,",
+        "a conta de tokens e fechada e o aluguel das duas contas volta ao dono."
+      ],
+      "discriminator": [
+        118,
+        217,
+        51,
+        140,
+        37,
+        60,
+        187,
+        195
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokens",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "destino",
+          "docs": [
+            "Recebe qualquer sobra de tokens: so uma conta de tokens do proprio dono."
+          ],
+          "writable": true
+        },
+        {
+          "name": "dono",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "cofre"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "inicializar",
+      "docs": [
+        "Cria a configuracao. So a autoridade de atualizacao do programa pode chamar (evita que um estranho",
+        "inicialize antes de nos logo depois do deploy). A moeda (mint) fica gravada para sempre."
+      ],
+      "discriminator": [
+        38,
+        175,
+        49,
+        47,
+        251,
+        17,
+        202,
+        203
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "programa",
+          "address": "E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX"
+        },
+        {
+          "name": "dados_programa"
+        },
+        {
+          "name": "moeda",
+          "docs": [
+            "A moeda do cofre: tem que ser do programa de token classico."
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "arbitro",
+          "type": "pubkey"
+        },
+        {
+          "name": "carteira_taxas",
+          "type": "pubkey"
+        },
+        {
+          "name": "taxa_saque_bps",
+          "type": "u16"
+        },
+        {
+          "name": "teto_aposta",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "liquidar_partida",
+      "docs": [
+        "O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B). Contas restantes: para CADA jogador,",
+        "na ordem da partida, o cofre e a conta de tokens dele (2 por jogador). Cada perdedor perde a aposta e",
+        "cada vencedor ganha uma aposta; no empate todos recebem de volta. Nada sai do grupo de jogadores."
+      ],
+      "discriminator": [
+        147,
+        159,
+        129,
+        54,
+        50,
+        62,
+        66,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partida",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  100,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partida.id",
+                "account": "Partida"
+              }
+            ]
+          }
+        },
+        {
+          "name": "arbitro",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "pagador",
+          "writable": true,
+          "relations": [
+            "partida"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "resultado",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "propor_admin",
+      "docs": [
+        "Troca de admin em duas etapas: o atual propoe, o novo aceita (evita entregar para um endereco errado)."
+      ],
+      "discriminator": [
+        177,
+        96,
+        12,
+        200,
+        84,
+        6,
+        28,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "novo_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "sacar",
+      "docs": [
+        "Saque: so o dono assina e o valor vai so para uma conta de tokens dele. A taxa (unica da plataforma)",
+        "vai para a conta de tokens da carteira de taxas. Funciona mesmo com o programa pausado."
+      ],
+      "discriminator": [
+        104,
+        250,
+        109,
+        216,
+        146,
+        245,
+        119,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          },
+          "writable": true
+        },
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokens",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "destino",
+          "docs": [
+            "Para onde vai o saque: so uma conta de tokens do proprio dono."
+          ],
+          "writable": true
+        },
+        {
+          "name": "destino_taxas",
+          "docs": [
+            "Para onde vai a taxa: so uma conta de tokens da carteira de taxas configurada."
+          ],
+          "writable": true
+        },
+        {
+          "name": "dono",
+          "signer": true,
+          "relations": [
+            "cofre"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "valor",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "autorizar_sessao",
+      "docs": [
+        "O dono autoriza uma chave de aposta (gerada no navegador dele) e paga o aluguel, que volta ao revogar."
+      ],
+      "discriminator": [
+        139,
+        28,
+        181,
+        98,
+        127,
+        54,
+        183,
+        177
+      ],
+      "accounts": [
+        {
+          "name": "sessao",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  115,
+                  115,
+                  97,
+                  111
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              },
+              {
+                "kind": "arg",
+                "path": "chave"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dono",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "chave",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "revogar_sessao",
+      "docs": [
+        "Revoga a chave de aposta (assina o dono ou a propria chave); o aluguel volta para o dono."
+      ],
+      "discriminator": [
+        7,
+        186,
+        113,
+        13,
+        231,
+        151,
+        185,
+        159
+      ],
+      "accounts": [
+        {
+          "name": "sessao",
+          "writable": true
+        },
+        {
+          "name": "dono",
+          "writable": true
+        },
+        {
+          "name": "quem",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "entrar_partida_sessao",
+      "docs": [
+        "A chave de aposta trava a aposta do dono dela; o valor tem de ser o da partida."
+      ],
+      "discriminator": [
+        221,
+        212,
+        66,
+        42,
+        40,
+        133,
+        189,
+        19
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "partida",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  100,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "partida.id",
+                "account": "Partida"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cofre",
+          "writable": true
+        },
+        {
+          "name": "sessao"
+        },
+        {
+          "name": "chave",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "aposta",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "trancar_saldo",
+      "docs": [
+        "O dono tranca (true) ou destranca (false) o saldo pela wallet. Trancado, nenhuma chave de aposta aposta; o saque continua normal."
+      ],
+      "discriminator": [
+        30,
+        221,
+        97,
+        4,
+        225,
+        54,
+        127,
+        229
+      ],
+      "accounts": [
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dono",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "trancar",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Cofre",
+      "discriminator": [
+        41,
+        87,
+        215,
+        100,
+        199,
+        10,
+        165,
+        235
+      ]
+    },
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
+      "name": "Partida",
+      "discriminator": [
+        114,
+        216,
+        39,
+        145,
+        50,
+        6,
+        61,
+        1
+      ]
+    },
+    {
+      "name": "Sessao",
+      "discriminator": [
+        211,
+        152,
+        49,
+        13,
+        218,
+        150,
+        171,
+        252
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NaoAutorizado",
+      "msg": "Nao autorizado"
+    },
+    {
+      "code": 6001,
+      "name": "Pausado",
+      "msg": "Programa pausado (saques continuam liberados)"
+    },
+    {
+      "code": 6002,
+      "name": "ValorInvalido",
+      "msg": "Valor invalido"
+    },
+    {
+      "code": 6003,
+      "name": "SaldoInsuficiente",
+      "msg": "Saldo insuficiente"
+    },
+    {
+      "code": 6004,
+      "name": "TaxaAcimaDoTeto",
+      "msg": "Taxa acima do teto fixo"
+    },
+    {
+      "code": 6005,
+      "name": "ApostaForaDoTeto",
+      "msg": "Aposta fora do teto"
+    },
+    {
+      "code": 6006,
+      "name": "TimesInvalidos",
+      "msg": "Times invalidos"
+    },
+    {
+      "code": 6007,
+      "name": "JogadorRepetido",
+      "msg": "Jogador repetido na partida"
+    },
+    {
+      "code": 6008,
+      "name": "NaoEstaNaPartida",
+      "msg": "Jogador nao esta nesta partida"
+    },
+    {
+      "code": 6009,
+      "name": "JaEntrou",
+      "msg": "Jogador ja travou a aposta"
+    },
+    {
+      "code": 6010,
+      "name": "PrazoEncerrado",
+      "msg": "Prazo encerrado"
+    },
+    {
+      "code": 6011,
+      "name": "EstadoInvalido",
+      "msg": "Estado da partida nao permite esta acao"
+    },
+    {
+      "code": 6012,
+      "name": "ResultadoInvalido",
+      "msg": "Resultado invalido"
+    },
+    {
+      "code": 6013,
+      "name": "ContasInvalidas",
+      "msg": "Contas invalidas"
+    },
+    {
+      "code": 6014,
+      "name": "CarteiraDeTaxasErrada",
+      "msg": "Carteira de taxas errada"
+    },
+    {
+      "code": 6015,
+      "name": "CofreNaoVazio",
+      "msg": "O cofre precisa estar vazio"
+    },
+    {
+      "code": 6016,
+      "name": "Overflow",
+      "msg": "Estouro numerico"
+    },
+    {
+      "code": 6017,
+      "name": "MoedaInvalida",
+      "msg": "Moeda invalida (o cofre so aceita a moeda configurada)"
+    },
+    {
+      "code": 6018,
+      "name": "ApostaDiferente",
+      "msg": "Valor da aposta diferente do da partida"
+    },
+    {
+      "code": 6019,
+      "name": "SaldoTrancado",
+      "msg": "Saldo trancado pelo dono: destranque pela wallet para apostar"
+    },
+    {
+      "code": 6020,
+      "name": "AcimaDoTetoDeSaldo",
+      "msg": "Deposito passaria do teto de saldo por cofre"
+    },
+    {
+      "code": 6021,
+      "name": "CofreCheio",
+      "msg": "Deposito passaria do teto total do cofre"
+    }
+  ],
+  "types": [
+    {
+      "name": "Cofre",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "dono",
+            "type": "pubkey"
+          },
+          {
+            "name": "saldo",
+            "docs": [
+              "Livre para apostar ou sacar (unidades da moeda; USDC tem 6 casas)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "travado",
+            "docs": [
+              "Preso em partidas em andamento."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "bump_tokens",
+            "type": "u8"
+          },
+          {
+            "name": "trancado",
+            "docs": [
+              "Saldo trancado: nenhuma chave de aposta aposta (so a wallet do dono tranca e destranca)."
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "arbitro",
+            "type": "pubkey"
+          },
+          {
+            "name": "carteira_taxas",
+            "type": "pubkey"
+          },
+          {
+            "name": "taxa_saque_bps",
+            "type": "u16"
+          },
+          {
+            "name": "teto_aposta",
+            "type": "u64"
+          },
+          {
+            "name": "pausado",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "moeda",
+            "docs": [
+              "A moeda do cofre (USDC). Gravada na inicializacao; nao muda."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "tem_admin_pendente",
+            "type": "bool"
+          },
+          {
+            "name": "admin_pendente",
+            "type": "pubkey"
+          },
+          {
+            "name": "teto_saldo",
+            "docs": [
+              "Maximo (livre + travado) por cofre depois de um deposito. 0 = sem teto."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "teto_total",
+            "docs": [
+              "Maximo somando todos os cofres. 0 = sem teto."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_no_cofre",
+            "docs": [
+              "Depositado e ainda nao sacado (soma dos cofres)."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EstadoPartida",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Aberta"
+          },
+          {
+            "name": "Travada"
+          },
+          {
+            "name": "Liquidada"
+          },
+          {
+            "name": "Cancelada"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Partida",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "aposta",
+            "type": "u64"
+          },
+          {
+            "name": "por_time",
+            "type": "u8"
+          },
+          {
+            "name": "entrou",
+            "docs": [
+              "Bit i ligado = jogador i ja travou a aposta."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "estado",
+            "type": {
+              "defined": {
+                "name": "EstadoPartida"
+              }
+            }
+          },
+          {
+            "name": "criada_em",
+            "type": "i64"
+          },
+          {
+            "name": "pagador",
+            "docs": [
+              "Quem pagou o aluguel da conta da partida (recebe de volta ao fechar)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "jogadores",
+            "docs": [
+              "Time A primeiro, depois time B."
+            ],
+            "type": {
+              "vec": "pubkey"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Sessao",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "dono",
+            "type": "pubkey"
+          },
+          {
+            "name": "chave",
+            "type": "pubkey"
+          },
+          {
+            "name": "criada_em",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}

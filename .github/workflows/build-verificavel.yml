@@ -1,0 +1,53 @@
+# Build verificavel do cofre: compila na imagem Docker oficial da Solana (sempre o mesmo arquivo, byte a byte),
+# mostra o hash, confere o contato de seguranca embutido e compara com o programa publicado na devnet.
+name: Build verificavel
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PROGRAMA_DEVNET: E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX
+      IMAGEM: solanafoundation/solana-verifiable-build:2.1.21
+      SOLANA_VERIFY: 0.5.2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/solana-verify
+          key: solana-verify-${{ env.SOLANA_VERIFY }}
+      - name: Instalar solana-verify
+        run: command -v solana-verify || cargo install solana-verify --locked --version "$SOLANA_VERIFY"
+      - name: Compilar (reproduzivel)
+        run: solana-verify build --library-name cofre --base-image "$IMAGEM"
+      - name: Hash, tamanho e contato de seguranca
+        id: hash
+        run: |
+          HASH=$(solana-verify get-executable-hash target/deploy/cofre.so)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "$HASH  cofre.so" > target/deploy/cofre.so.sha256
+          TAMANHO=$(stat -c %s target/deploy/cofre.so)
+          grep -aq "BEGIN SECURITY.TXT V1" target/deploy/cofre.so || { echo "contato de seguranca nao encontrado no programa"; exit 1; }
+          {
+            echo "## Build verificavel"
+            echo "- Hash do programa compilado: \`$HASH\`"
+            echo "- Tamanho: $TAMANHO bytes"
+            echo "- Contato de seguranca (security.txt) embutido: sim"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Comparar com a devnet
+        run: |
+          REDE=$(solana-verify get-program-hash -u https://api.devnet.solana.com "$PROGRAMA_DEVNET" || echo "erro ao ler")
+          if [ "$REDE" = "${{ steps.hash.outputs.hash }}" ]; then R="IGUAL: o programa da devnet e exatamente este codigo"; else R="diferente (a devnet ainda roda outra versao)"; fi
+          echo "- Devnet (\`$PROGRAMA_DEVNET\`): \`$REDE\` → $R" >> "$GITHUB_STEP_SUMMARY"
+          echo "$R"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cofre-${{ github.sha }}
+          path: |
+            target/deploy/cofre.so
+            target/deploy/cofre.so.sha256

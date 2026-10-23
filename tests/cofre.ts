@@ -1,0 +1,382 @@
+// Testes do cofre DeoZERA (rodam numa blockchain Solana local: npm test, que usa scripts/testar.sh).
+// Cada regra de seguranca tem um teste que tenta quebra-la. A moeda e um "USDC de teste" (6 casas) criado aqui.
+import * as anchor from '@coral-xyz/anchor';
+import { BN, Program } from '@coral-xyz/anchor';
+import { createAccount, createAssociatedTokenAccount, createMint, getAccount, mintTo, transfer } from '@solana/spl-token';
+import { expect } from 'chai';
+import { readFileSync } from 'fs';
+
+// Roda a partir da pasta solana/ (scripts/testar.sh)
+const idl = JSON.parse(readFileSync('idl/cofre.json', 'utf8'));
+
+const { Keypair, PublicKey, LAMPORTS_PER_SOL } = anchor.web3;
+type Chave = anchor.web3.PublicKey;
+const USDC = (n: number) => new BN(Math.round(n * 1_000_000));
+const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
+
+describe('cofre', () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  // O programa e escrito com Pinocchio; o IDL (escrito a mao, igual ao da versao Anchor) descreve a interface
+  const program = new Program(idl as anchor.Idl, provider);
+  const conn = provider.connection;
+  const pagador = (provider.wallet as anchor.Wallet).payer;
+
+  const arbitro = Keypair.generate();
+  const taxas = Keypair.generate();
+  const alice = Keypair.generate();
+  const bob = Keypair.generate();
+  const carol = Keypair.generate();
+  let moeda: Chave; let moedaFalsa: Chave;
+  const ata: Record<string, Chave> = {}; // conta de USDC (associada) de cada um
+  let taxasUsdc: Chave;
+
+  const [config] = PublicKey.findProgramAddressSync([Buffer.from('config')], program.programId);
+  const cofreDe = (k: Chave) => PublicKey.findProgramAddressSync([Buffer.from('cofre'), k.toBuffer()], program.programId)[0];
+  const tokensDe = (k: Chave) => PublicKey.findProgramAddressSync([Buffer.from('tokens'), k.toBuffer()], program.programId)[0];
+  const partidaDe = (id: number) => PublicKey.findProgramAddressSync([Buffer.from('partida'), new BN(id).toArrayLike(Buffer, 'le', 8)], program.programId)[0];
+  const sessaoDe = (dono: Chave, chave: Chave) => PublicKey.findProgramAddressSync([Buffer.from('sessao'), dono.toBuffer(), chave.toBuffer()], program.programId)[0];
+  const [dadosPrograma] = PublicKey.findProgramAddressSync([program.programId.toBuffer()], LOADER);
+  const usdc = async (conta: Chave) => Number((await getAccount(conn, conta)).amount);
+  const cofre = async (k: Chave) => program.account.cofre.fetch(cofreDe(k));
+  const sacar = (k: anchor.web3.Keypair, valor: BN, extra: Record<string, Chave> = {}) => program.methods.sacar(valor)
+    .accountsPartial({ dono: k.publicKey, destino: ata[k.publicKey.toBase58()], destinoTaxas: taxasUsdc, ...extra }).signers([k]).rpc();
+  const depositar = (k: anchor.web3.Keypair, valor: BN, extra: Record<string, Chave> = {}) => program.methods.depositar(valor)
+    .accountsPartial({ dono: k.publicKey, origem: ata[k.publicKey.toBase58()], ...extra }).signers([k]).rpc();
+  // Contas restantes da liquidacao: cofre + conta de tokens de cada jogador, na ordem da partida
+  const pares = (lista: Chave[]) => lista.flatMap((k) => [cofreDe(k), tokensDe(k)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
+
+  // Confere o erro pelo codigo do programa (6000 + posicao), procurando o nome no IDL
+  async function falha(promessa: Promise<unknown>, nome?: string) {
+    try { await promessa; } catch (e) {
+      if (nome) {
+        const codigo = (idl.errors as { code: number; name: string }[]).find((x) => x.name === nome)!.code;
+        const texto = String((e as Error).message ?? e) + ' ' + JSON.stringify(e);
+        const achou = (e as { code?: number }).code === codigo || texto.includes('0x' + codigo.toString(16)) || texto.includes(nome);
+        expect(achou, `esperava ${nome} (${codigo}), veio: ${texto.slice(0, 300)}`).to.equal(true);
+      }
+      return;
+    }
+    expect.fail('deveria ter falhado');
+  }
+
+  before(async () => {
+    for (const k of [arbitro, taxas, alice, bob, carol]) {
+      const sig = await conn.requestAirdrop(k.publicKey, 10 * LAMPORTS_PER_SOL);
+      await conn.confirmTransaction(sig, 'confirmed');
+    }
+    moeda = await createMint(conn, pagador, pagador.publicKey, null, 6);
+    moedaFalsa = await createMint(conn, pagador, pagador.publicKey, null, 6);
+    for (const k of [alice, bob, carol]) {
+      ata[k.publicKey.toBase58()] = await createAssociatedTokenAccount(conn, pagador, moeda, k.publicKey);
+      await mintTo(conn, pagador, moeda, ata[k.publicKey.toBase58()], pagador, 100_000_000); // 100 USDC
+    }
+    taxasUsdc = await createAssociatedTokenAccount(conn, pagador, moeda, taxas.publicKey);
+  });
+
+  it('so a autoridade de atualizacao do programa inicializa (e a moeda fica gravada)', async () => {
+    await falha(program.methods.inicializar(arbitro.publicKey, taxas.publicKey, 1000, USDC(50))
+      .accountsPartial({ config, admin: alice.publicKey, dadosPrograma, moeda }).signers([alice]).rpc(), 'NaoAutorizado');
+    await program.methods.inicializar(arbitro.publicKey, taxas.publicKey, 1000, USDC(50))
+      .accountsPartial({ config, admin: provider.wallet.publicKey, dadosPrograma, moeda }).rpc();
+    const c = await program.account.config.fetch(config);
+    expect(c.taxaSaqueBps).to.equal(1000);
+    expect(c.moeda.toBase58()).to.equal(moeda.toBase58());
+  });
+
+  it('taxa nunca passa do teto fixo (20%) e so o admin muda a configuracao', async () => {
+    await falha(program.methods.atualizarConfig(null, null, 2500, null, null, null, null).accountsPartial({ config }).rpc(), 'TaxaAcimaDoTeto');
+    await falha(program.methods.atualizarConfig(null, null, 0, null, null, null, null)
+      .accountsPartial({ config, admin: alice.publicKey }).signers([alice]).rpc(), 'NaoAutorizado');
+  });
+
+  it('cofre so abre com a moeda configurada', async () => {
+    await falha(program.methods.abrirCofre().accountsPartial({ dono: alice.publicKey, moeda: moedaFalsa }).signers([alice]).rpc(), 'MoedaInvalida');
+  });
+
+  it('cada um abre o proprio cofre e deposita da propria conta', async () => {
+    for (const k of [alice, bob]) {
+      await program.methods.abrirCofre().accountsPartial({ dono: k.publicKey, moeda }).signers([k]).rpc();
+      await depositar(k, USDC(20));
+    }
+    expect((await cofre(alice.publicKey)).saldo.toString()).to.equal(USDC(20).toString());
+    expect(await usdc(tokensDe(alice.publicKey))).to.equal(20_000_000);
+    expect(await usdc(ata[alice.publicKey.toBase58()])).to.equal(80_000_000);
+  });
+
+  it('ninguem deposita com o dinheiro de outro, nem com outra moeda', async () => {
+    // Bob tenta usar a conta de USDC da Alice como origem
+    await falha(depositar(bob, USDC(1), { origem: ata[alice.publicKey.toBase58()] }), 'NaoAutorizado');
+    const falsa = await createAccount(conn, pagador, moedaFalsa, bob.publicKey, Keypair.generate());
+    await mintTo(conn, pagador, moedaFalsa, falsa, pagador, 5_000_000);
+    await falha(depositar(bob, USDC(1), { origem: falsa }), 'MoedaInvalida');
+  });
+
+  it('ninguem saca do cofre de outro nem para a conta de outro', async () => {
+    await falha(program.methods.sacar(USDC(1))
+      .accountsPartial({ cofre: cofreDe(alice.publicKey), tokens: tokensDe(alice.publicKey), dono: bob.publicKey, destino: ata[bob.publicKey.toBase58()], destinoTaxas: taxasUsdc })
+      .signers([bob]).rpc());
+    // Alice assina, mas manda o saque para a conta do Bob
+    await falha(sacar(alice, USDC(1), { destino: ata[bob.publicKey.toBase58()] }), 'NaoAutorizado');
+  });
+
+  it('a taxa so pode ir para a conta da carteira de taxas configurada', async () => {
+    await falha(sacar(alice, USDC(1), { destinoTaxas: ata[carol.publicKey.toBase58()] }), 'CarteiraDeTaxasErrada');
+  });
+
+  it('saque: 10% para a carteira de taxas, o resto para o dono', async () => {
+    const antesAlice = await usdc(ata[alice.publicKey.toBase58()]);
+    const antesTaxas = await usdc(taxasUsdc);
+    await sacar(alice, USDC(10));
+    expect((await usdc(taxasUsdc)) - antesTaxas).to.equal(1_000_000);
+    expect((await usdc(ata[alice.publicKey.toBase58()])) - antesAlice).to.equal(9_000_000);
+    expect((await cofre(alice.publicKey)).saldo.toString()).to.equal(USDC(10).toString());
+    expect(await usdc(tokensDe(alice.publicKey))).to.equal(10_000_000);
+    await falha(sacar(alice, USDC(50)), 'SaldoInsuficiente');
+  });
+
+  it('pausado: bloqueia deposito, mas o saque continua liberado', async () => {
+    await program.methods.atualizarConfig(null, null, null, null, true, null, null).accountsPartial({ config }).rpc();
+    await falha(depositar(bob, USDC(1)), 'Pausado');
+    await sacar(bob, USDC(1));
+    await program.methods.atualizarConfig(null, null, null, null, false, null, null).accountsPartial({ config }).rpc();
+    await depositar(bob, USDC(1));
+  });
+
+  it('so o arbitro cria partida, dentro do teto e sem jogador repetido', async () => {
+    await falha(program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [bob.publicKey])
+      .accountsPartial({ arbitro: alice.publicKey }).signers([alice]).rpc(), 'NaoAutorizado');
+    await falha(program.methods.criarPartida(new BN(1), USDC(60), [alice.publicKey], [bob.publicKey])
+      .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc(), 'ApostaForaDoTeto');
+    await falha(program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [alice.publicKey])
+      .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc(), 'JogadorRepetido');
+    await program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [bob.publicKey])
+      .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+  });
+
+  it('cada jogador trava a propria aposta (quem nao esta na partida nao entra)', async () => {
+    const partida = partidaDe(1);
+    await program.methods.abrirCofre().accountsPartial({ dono: carol.publicKey, moeda }).signers([carol]).rpc();
+    await depositar(carol, USDC(10));
+    await falha(program.methods.entrarPartida().accountsPartial({ partida, jogador: carol.publicKey }).signers([carol]).rpc(), 'NaoEstaNaPartida');
+    await program.methods.entrarPartida().accountsPartial({ partida, jogador: alice.publicKey }).signers([alice]).rpc();
+    await falha(program.methods.entrarPartida().accountsPartial({ partida, jogador: alice.publicKey }).signers([alice]).rpc(), 'JaEntrou');
+    await falha(program.methods.liquidarPartida(1).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts(pares([alice.publicKey, bob.publicKey])).signers([arbitro]).rpc(), 'EstadoInvalido');
+    await program.methods.entrarPartida().accountsPartial({ partida, jogador: bob.publicKey }).signers([bob]).rpc();
+    expect((await cofre(alice.publicKey)).travado.toString()).to.equal(USDC(5).toString());
+  });
+
+  it('so o arbitro liquida, com as contas certas, e o dinheiro fica entre os jogadores', async () => {
+    const partida = partidaDe(1);
+    const liquidar = (quem: anchor.web3.Keypair, contas: ReturnType<typeof pares>) => program.methods.liquidarPartida(1)
+      .accountsPartial({ partida, arbitro: quem.publicKey, pagador: arbitro.publicKey }).remainingAccounts(contas).signers([quem]).rpc();
+    await falha(liquidar(alice, pares([alice.publicKey, bob.publicKey])), 'NaoAutorizado');
+    await falha(liquidar(arbitro, pares([bob.publicKey, alice.publicKey])), 'ContasInvalidas'); // ordem errada
+    await falha(liquidar(arbitro, pares([alice.publicKey, carol.publicKey])), 'ContasInvalidas'); // quem nao jogou
+    // Conta de tokens trocada: o cofre da Bob com a conta de tokens da Carol (desviar para fora do grupo)
+    const trocada = pares([alice.publicKey, bob.publicKey]);
+    trocada[3] = { pubkey: tokensDe(carol.publicKey), isSigner: false, isWritable: true };
+    await falha(liquidar(arbitro, trocada), 'ContasInvalidas');
+
+    const total = async () => (await usdc(tokensDe(alice.publicKey))) + (await usdc(tokensDe(bob.publicKey)));
+    const antes = await total();
+    await liquidar(arbitro, pares([alice.publicKey, bob.publicKey]));
+    const a = await cofre(alice.publicKey); const b = await cofre(bob.publicKey);
+    expect(a.saldo.toString()).to.equal(USDC(15).toString()); // 10 livres + venceu (5 de volta + 5 do Bob)
+    expect(a.travado.toNumber()).to.equal(0);
+    expect(b.travado.toNumber()).to.equal(0);
+    expect(await usdc(tokensDe(alice.publicKey))).to.equal(15_000_000); // os tokens acompanham a contabilidade
+    expect(await total()).to.equal(antes); // nada saiu do grupo de jogadores
+    expect(await conn.getAccountInfo(partida)).to.equal(null); // conta da partida fechada
+  });
+
+  it('cancelamento devolve as apostas; so o arbitro cancela antes dos prazos', async () => {
+    await program.methods.criarPartida(new BN(2), USDC(3), [alice.publicKey], [bob.publicKey])
+      .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    const partida = partidaDe(2);
+    await program.methods.entrarPartida().accountsPartial({ partida, jogador: alice.publicKey }).signers([alice]).rpc();
+    const contas = [{ pubkey: cofreDe(alice.publicKey), isSigner: false, isWritable: true }];
+    await falha(program.methods.cancelarPartida().accountsPartial({ partida, quem: bob.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts(contas).signers([bob]).rpc(), 'NaoAutorizado');
+    await program.methods.cancelarPartida().accountsPartial({ partida, quem: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts(contas).signers([arbitro]).rpc();
+    const a = await cofre(alice.publicKey);
+    expect(a.saldo.toString()).to.equal(USDC(15).toString());
+    expect(a.travado.toNumber()).to.equal(0);
+  });
+
+  it('cofre com saldo nao fecha; vazio fecha, devolve sobras e o aluguel', async () => {
+    const dono = carol.publicKey.toBase58();
+    const fechar = () => program.methods.fecharCofre().accountsPartial({ dono: carol.publicKey, destino: ata[dono] }).signers([carol]).rpc();
+    await falha(fechar(), 'CofreNaoVazio');
+    await sacar(carol, USDC(10));
+    // Alguem manda USDC direto para a conta de tokens do cofre: nao pode impedir o fechamento
+    await transfer(conn, pagador, ata[alice.publicKey.toBase58()], tokensDe(carol.publicKey), alice, 250_000);
+    const antes = await usdc(ata[dono]);
+    await fechar();
+    expect(await usdc(ata[dono])).to.equal(antes + 250_000);
+    expect(await conn.getAccountInfo(cofreDe(carol.publicKey))).to.equal(null);
+    expect(await conn.getAccountInfo(tokensDe(carol.publicKey))).to.equal(null);
+  });
+
+  // ---------- Riscos especificos da versao Pinocchio (checagens escritas a mao) ----------
+
+  it('contas falsas: configuracao, cofre e programa de token "imitados" sao recusados', async () => {
+    // Uma carteira comum no lugar da configuracao
+    await falha(depositar(alice, USDC(1), { config: carol.publicKey }), 'ContasInvalidas');
+    // Outra conta do proprio programa (a configuracao) no lugar do cofre
+    await falha(depositar(alice, USDC(1), { cofre: config }), 'ContasInvalidas');
+    // Programa de token falso (o System Program) no lugar do programa de token
+    await falha(sacar(alice, USDC(1), { tokenProgram: anchor.web3.SystemProgram.programId }), 'ContasInvalidas');
+    // A conta de tokens do cofre de outra pessoa
+    await falha(depositar(alice, USDC(1), { tokens: tokensDe(bob.publicKey) }), 'ContasInvalidas');
+  });
+
+  it('sem a assinatura do dono nada sai do cofre', async () => {
+    for (const metodo of ['depositar', 'sacar'] as const) {
+      const extra = metodo === 'sacar' ? { destino: ata[alice.publicKey.toBase58()], destinoTaxas: taxasUsdc } : { origem: ata[alice.publicKey.toBase58()] };
+      const ix = await program.methods[metodo](USDC(1)).accountsPartial({ dono: alice.publicKey, ...extra }).instruction();
+      ix.keys.forEach((k) => { if (k.pubkey.equals(alice.publicKey)) k.isSigner = false; }); // tira a assinatura da Alice
+      const tx = new anchor.web3.Transaction().add(ix); // quem assina e paga e so a carteira do teste
+      await falha(provider.sendAndConfirm(tx), 'NaoAutorizado');
+    }
+  });
+
+  it('dados cortados ou instrucao desconhecida sao recusados; configuracao nao inicializa duas vezes', async () => {
+    const ix = await program.methods.depositar(USDC(1)).accountsPartial({ dono: alice.publicKey, origem: ata[alice.publicKey.toBase58()] }).instruction();
+    ix.data = ix.data.subarray(0, 12); // valor pela metade
+    await falha(provider.sendAndConfirm(new anchor.web3.Transaction().add(ix), [alice]));
+    ix.data = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]); // identificador que nao existe
+    await falha(provider.sendAndConfirm(new anchor.web3.Transaction().add(ix), [alice]));
+    await falha(program.methods.inicializar(arbitro.publicKey, carol.publicKey, 0, USDC(50))
+      .accountsPartial({ config, admin: provider.wallet.publicKey, dadosPrograma, moeda }).rpc());
+  });
+
+  it('liquidacao com pagador errado e recusada; o aluguel volta so para quem pagou', async () => {
+    await program.methods.criarPartida(new BN(3), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    const partida = partidaDe(3);
+    for (const k of [alice, bob]) await program.methods.entrarPartida().accountsPartial({ partida, jogador: k.publicKey }).signers([k]).rpc();
+    await falha(program.methods.liquidarPartida(0).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: bob.publicKey })
+      .remainingAccounts(pares([alice.publicKey, bob.publicKey])).signers([arbitro]).rpc(), 'ContasInvalidas');
+    await program.methods.liquidarPartida(0).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts(pares([alice.publicKey, bob.publicKey])).signers([arbitro]).rpc();
+    expect((await cofre(alice.publicKey)).saldo.toString()).to.equal(USDC(15).toString()); // empate: devolvido
+  });
+
+  it('SOL mandado antes para o endereco do cofre nao impede ninguem de abrir o proprio cofre', async () => {
+    const dave = Keypair.generate();
+    await conn.confirmTransaction(await conn.requestAirdrop(dave.publicKey, 2 * LAMPORTS_PER_SOL), 'confirmed');
+    const tx = new anchor.web3.Transaction();
+    for (const alvo of [cofreDe(dave.publicKey), tokensDe(dave.publicKey)]) {
+      tx.add(anchor.web3.SystemProgram.transfer({ fromPubkey: provider.wallet.publicKey, toPubkey: alvo, lamports: 1_000_000 }));
+    }
+    await provider.sendAndConfirm(tx);
+    await program.methods.abrirCofre().accountsPartial({ dono: dave.publicKey, moeda }).signers([dave]).rpc();
+    const c = await cofre(dave.publicKey);
+    expect(c.dono.toBase58()).to.equal(dave.publicKey.toBase58());
+    expect((await getAccount(conn, tokensDe(dave.publicKey))).owner.toBase58()).to.equal(cofreDe(dave.publicKey).toBase58());
+  });
+
+  // ---------- Chave de aposta (aposta sem abrir a wallet a cada partida) ----------
+
+  it('chave de aposta: so o dono autoriza; trava so a aposta do dono, so com o valor da partida', async () => {
+    const chave = Keypair.generate(); // gerada "no navegador": nao tem SOL, quem paga a rede e o servidor
+    const sessao = sessaoDe(alice.publicKey, chave.publicKey);
+    // Bob nao autoriza chave no nome da Alice (o endereco da sessao e derivado do dono que assina)
+    await falha(program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao, dono: bob.publicKey }).signers([bob]).rpc(), 'ContasInvalidas');
+    await program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao, dono: alice.publicKey }).signers([alice]).rpc();
+
+    await program.methods.criarPartida(new BN(4), USDC(2), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    const partida = partidaDe(4);
+    const entrar = (valor: BN, k: anchor.web3.Keypair, cofreAlvo: Chave, s: Chave) => program.methods.entrarPartidaSessao(valor)
+      .accountsPartial({ partida, cofre: cofreAlvo, sessao: s, chave: k.publicKey }).signers([k]).rpc();
+    await falha(entrar(USDC(3), chave, cofreDe(alice.publicKey), sessao), 'ApostaDiferente'); // valor que a Alice nao escolheu
+    await falha(entrar(USDC(2), chave, cofreDe(bob.publicKey), sessao), 'NaoAutorizado'); // chave da Alice no cofre do Bob
+    const intrusa = Keypair.generate(); // chave nunca autorizada
+    await falha(entrar(USDC(2), intrusa, cofreDe(alice.publicKey), sessaoDe(alice.publicKey, intrusa.publicKey)), 'ContasInvalidas');
+    await falha(entrar(USDC(2), intrusa, cofreDe(alice.publicKey), sessao), 'NaoAutorizado'); // sessao certa, chave errada
+    await entrar(USDC(2), chave, cofreDe(alice.publicKey), sessao);
+    expect((await cofre(alice.publicKey)).travado.toString()).to.equal(USDC(2).toString());
+    await falha(entrar(USDC(2), chave, cofreDe(alice.publicKey), sessao), 'JaEntrou');
+    await program.methods.cancelarPartida().accountsPartial({ partida, quem: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts([{ pubkey: cofreDe(alice.publicKey), isSigner: false, isWritable: true }]).signers([arbitro]).rpc();
+    expect((await cofre(alice.publicKey)).saldo.toString()).to.equal(USDC(15).toString());
+  });
+
+  it('chave de aposta nao saca; revogada pelo dono ou por ela mesma, para de valer e o aluguel volta ao dono', async () => {
+    const chave = Keypair.generate();
+    const sessao = sessaoDe(alice.publicKey, chave.publicKey);
+    await program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao, dono: alice.publicKey }).signers([alice]).rpc();
+    // Sacar assinando com a chave de aposta: recusado (so a wallet do dono saca)
+    await falha(program.methods.sacar(USDC(1)).accountsPartial({ dono: chave.publicKey, cofre: cofreDe(alice.publicKey), tokens: tokensDe(alice.publicKey),
+      destino: ata[alice.publicKey.toBase58()], destinoTaxas: taxasUsdc }).signers([chave]).rpc(), 'NaoAutorizado');
+    // Bob nao revoga a chave da Alice
+    await falha(program.methods.revogarSessao().accountsPartial({ sessao, dono: alice.publicKey, quem: bob.publicKey }).signers([bob]).rpc(), 'NaoAutorizado');
+    const antes = await conn.getBalance(alice.publicKey);
+    await program.methods.revogarSessao().accountsPartial({ sessao, dono: alice.publicKey, quem: chave.publicKey }).signers([chave]).rpc();
+    expect(await conn.getAccountInfo(sessao)).to.equal(null);
+    expect(await conn.getBalance(alice.publicKey)).to.be.greaterThan(antes); // aluguel de volta para a Alice
+    await program.methods.criarPartida(new BN(5), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await falha(program.methods.entrarPartidaSessao(USDC(1)).accountsPartial({ partida: partidaDe(5), cofre: cofreDe(alice.publicKey), sessao, chave: chave.publicKey })
+      .signers([chave]).rpc(), 'ContasInvalidas');
+    // Revogar pela wallet tambem funciona
+    const outra = Keypair.generate();
+    const s2 = sessaoDe(alice.publicKey, outra.publicKey);
+    await program.methods.autorizarSessao(outra.publicKey).accountsPartial({ sessao: s2, dono: alice.publicKey }).signers([alice]).rpc();
+    await program.methods.revogarSessao().accountsPartial({ sessao: s2, dono: alice.publicKey, quem: alice.publicKey }).signers([alice]).rpc();
+    expect(await conn.getAccountInfo(s2)).to.equal(null);
+  });
+
+  it('saldo trancado: nenhuma chave de aposta aposta; so a wallet do dono tranca e destranca; o saque continua', async () => {
+    const chave = Keypair.generate();
+    const sessao = sessaoDe(bob.publicKey, chave.publicKey);
+    await program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao, dono: bob.publicKey }).signers([bob]).rpc();
+    const trancar = (v: boolean, k: anchor.web3.Keypair, dono = bob.publicKey) => program.methods.trancarSaldo(v)
+      .accountsPartial({ cofre: cofreDe(dono), dono: k.publicKey }).signers([k]).rpc();
+    await falha(trancar(true, alice), 'NaoAutorizado'); // a Alice nao tranca o cofre do Bob
+    await falha(trancar(true, chave), 'NaoAutorizado'); // nem a chave de aposta
+    await trancar(true, bob);
+    expect((await cofre(bob.publicKey)).trancado).to.equal(true);
+
+    await program.methods.criarPartida(new BN(6), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    const entrar = () => program.methods.entrarPartidaSessao(USDC(1))
+      .accountsPartial({ partida: partidaDe(6), cofre: cofreDe(bob.publicKey), sessao, chave: chave.publicKey }).signers([chave]).rpc();
+    await falha(entrar(), 'SaldoTrancado');
+    await sacar(bob, USDC(1)); // trancado nao prende o dinheiro
+    await falha(trancar(false, chave), 'NaoAutorizado'); // so a wallet destranca
+    await trancar(false, bob);
+    await entrar();
+    expect((await cofre(bob.publicKey)).travado.toString()).to.equal(USDC(1).toString());
+  });
+
+  it('tetos de deposito (so para testes/beta): por cofre e total; 0 = sem teto; saque e apostas nunca barrados', async () => {
+    const atual = await program.account.config.fetch(config);
+    expect(atual.tetoSaldo.toNumber()).to.equal(0); // nasce sem teto
+    const tetos = (porCofre: number | null, total: number | null) => program.methods
+      .atualizarConfig(null, null, null, null, null, porCofre === null ? null : USDC(porCofre), total === null ? null : USDC(total)).accountsPartial({ config }).rpc();
+    await falha(program.methods.atualizarConfig(null, null, null, null, null, USDC(1), null).accountsPartial({ config, admin: alice.publicKey })
+      .signers([alice]).rpc(), 'NaoAutorizado'); // so o admin
+    const cAlice = await cofre(alice.publicKey);
+    const temAlice = (cAlice.saldo.toNumber() + cAlice.travado.toNumber()) / 1e6;
+    await tetos(temAlice + 2, null);
+    await falha(depositar(alice, USDC(3)), 'AcimaDoTetoDeSaldo');
+    await depositar(alice, USDC(2)); // ate o teto, ok
+    const total = (await program.account.config.fetch(config)).totalNoCofre.toNumber() / 1e6;
+    await tetos(0, total + 1); // sem teto por cofre; teto total logo acima do que ja esta guardado
+    await falha(depositar(bob, USDC(2)), 'CofreCheio');
+    await depositar(bob, USDC(1));
+    await sacar(bob, USDC(1)); // saque nunca e barrado; e libera espaco no total
+    expect((await program.account.config.fetch(config)).totalNoCofre.toNumber() / 1e6).to.be.closeTo(total, 1e-6);
+    await tetos(0, 0); // sem teto de novo
+    await depositar(bob, USDC(5));
+  });
+
+  it('troca de admin em duas etapas', async () => {
+    const novo = Keypair.generate();
+    await program.methods.proporAdmin(novo.publicKey).accountsPartial({ config }).rpc();
+    await falha(program.methods.aceitarAdmin().accountsPartial({ config, novoAdmin: alice.publicKey }).signers([alice]).rpc(), 'NaoAutorizado');
+    await program.methods.aceitarAdmin().accountsPartial({ config, novoAdmin: novo.publicKey }).signers([novo]).rpc();
+    expect((await program.account.config.fetch(config)).admin.toBase58()).to.equal(novo.publicKey.toBase58());
+  });
+});
