@@ -13,9 +13,9 @@ O código está público para que qualquer pessoa confira **o que o programa faz
 - **Saque:** só o dono do cofre saca, e só para uma conta dele. O saque funciona até com o programa pausado.
 - **Aposta:** só trava com a assinatura do dono ou de uma "chave de aposta" que ele autorizou pela própria carteira. Essa chave só trava aposta: não saca, não transfere e o dono revoga quando quiser.
 - **Saldo trancado:** o dono pode trancar o saldo pela carteira; trancado, nenhuma chave de aposta aposta.
-- **Árbitro (servidor):** só cria a partida e informa o resultado e quem abandonou. O valor travado se move entre os jogadores daquela partida; a única saída é a **pool de abandono**: o que quem abandonou receberia vai para a carteira de taxas (nunca mais que a parte dele, nunca todos os jogadores; os outros recebem o mesmo). Aposta tem teto.
+- **Árbitro (servidor):** só cria a partida e informa o resultado e quem abandonou. O valor travado se move entre os jogadores daquela partida; as únicas saídas são a **taxa da partida** (abaixo) e a **pool de abandono**: o que quem abandonou receberia vai para a carteira de taxas (nunca mais que a parte dele, nunca todos os jogadores; os outros recebem o mesmo). Aposta tem teto.
 - **Prazos:** se o resultado não for informado em 24 h (ou a partida não encher em 10 min), qualquer pessoa cancela e todos recebem de volta.
-- **Taxa:** só no saque, com teto fixo de 20% no código, e só para a carteira de taxas configurada.
+- **Taxa:** só nas partidas com vencedor, uma porcentagem do pote (hoje 5%) tirada do que o vencedor recebe, com teto fixo de 10% do pote no código, e só para a carteira de taxas configurada. Depósito, saque, empate e cancelamento não têm taxa.
 - **Moeda:** USDC, gravada na inicialização e imutável.
 
 Detalhes, testes e resultado da revisão interna: [AUDITORIA.md](AUDITORIA.md). Interface (instruções e contas): [idl/cofre.json](idl/cofre.json).
@@ -35,7 +35,7 @@ solana-verify get-program-hash -u https://api.devnet.solana.com E2zft5kPUBFgwbJY
 Se os dois hashes forem iguais, o programa da rede é exatamente o deste código.
 
 ## Testes
-24 testes (um por regra, incluindo as tentativas de fraude) e um teste de ataque aleatório que confere as regras de contabilidade a cada operação. Rodam numa blockchain Solana local (precisa do Solana 2.1.21, Rust e Node 22):
+25 testes (um por regra, incluindo as tentativas de fraude) e um teste de ataque aleatório que confere as regras de contabilidade a cada operação. Rodam numa blockchain Solana local (precisa do Solana 2.1.21, Rust e Node 22):
 
 ```bash
 npm ci

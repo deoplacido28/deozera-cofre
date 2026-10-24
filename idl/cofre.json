@@ -2,7 +2,7 @@
   "address": "E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX",
   "metadata": {
     "name": "cofre",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "spec": "0.1.0",
     "description": "Cofre DeoZERA (Pinocchio). Interface igual a versao Anchor; campos de tamanho variavel no fim das contas."
   },
@@ -147,7 +147,7 @@
     {
       "name": "atualizar_config",
       "docs": [
-        "Admin muda parametros. A taxa nunca passa do teto; pausar NAO bloqueia saques; a moeda nao muda."
+        "Admin muda parametros. A taxa das partidas nunca passa do teto (10% do pote); pausar NAO bloqueia saques; a moeda nao muda."
       ],
       "discriminator": [
         187,
@@ -205,7 +205,7 @@
           }
         },
         {
-          "name": "taxa_saque_bps",
+          "name": "taxa_partida_bps",
           "type": {
             "option": "u16"
           }
@@ -770,7 +770,7 @@
           "type": "pubkey"
         },
         {
-          "name": "taxa_saque_bps",
+          "name": "taxa_partida_bps",
           "type": "u16"
         },
         {
@@ -784,9 +784,10 @@
       "docs": [
         "O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B) e, se houver, quem ABANDONOU a partida (bit i =",
         "jogador i). Contas restantes: para CADA jogador, na ordem da partida, o cofre e a conta de tokens dele (2 por jogador);",
-        "com abandono, por ultimo, a conta de tokens da carteira de taxas. Cada perdedor perde a aposta e cada vencedor ganha",
-        "uma aposta; no empate todos recebem de volta. Pool de abandono: quem abandonou nao recebe nada; o que ele receberia",
-        "vai para a carteira de taxas; os outros recebem o mesmo."
+        "por ultimo, se houver taxa (resultado com vencedor e taxa > 0) ou abandono, a conta de tokens da carteira de taxas.",
+        "Cada perdedor perde a aposta; cada vencedor recebe a dele de volta mais a aposta do perdedor correspondente menos a",
+        "taxa (porcentagem das duas apostas do par = do pote). Empate: todos recebem de volta, sem taxa. Pool de abandono:",
+        "quem abandonou nao recebe nada; o que ele receberia vai para a carteira de taxas; os outros recebem o mesmo."
       ],
       "discriminator": [
         147,
@@ -928,8 +929,8 @@
     {
       "name": "sacar",
       "docs": [
-        "Saque: so o dono assina e o valor vai so para uma conta de tokens dele. A taxa (unica da plataforma)",
-        "vai para a conta de tokens da carteira de taxas. Funciona mesmo com o programa pausado."
+        "Saque: so o dono assina e o valor vai inteiro so para uma conta de tokens dele (sem taxa). Funciona mesmo com o",
+        "programa pausado."
       ],
       "discriminator": [
         104,
@@ -1010,13 +1011,6 @@
           "name": "destino",
           "docs": [
             "Para onde vai o saque: so uma conta de tokens do proprio dono."
-          ],
-          "writable": true
-        },
-        {
-          "name": "destino_taxas",
-          "docs": [
-            "Para onde vai a taxa: so uma conta de tokens da carteira de taxas configurada."
           ],
           "writable": true
         },
@@ -1495,7 +1489,7 @@
             "type": "pubkey"
           },
           {
-            "name": "taxa_saque_bps",
+            "name": "taxa_partida_bps",
             "type": "u16"
           },
           {

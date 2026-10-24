@@ -1,11 +1,13 @@
 // Teste de ataque aleatorio ("fuzzing") do cofre: sorteia centenas de operacoes, validas e maliciosas, e depois de
 // CADA uma confere as regras que nunca podem quebrar:
 //  1. o saldo de cada cofre (livre + travado) e exatamente o que esta na conta de tokens dele;
-//  2. nada some nem aparece: soma dos cofres = depositado - sacado (taxas incluidas no sacado);
+//  2. nada some nem aparece: soma dos cofres = depositado - sacado - taxas das partidas; a carteira de taxas tem
+//     exatamente as taxas cobradas (saque nao tem taxa);
 //  3. o travado de cada jogador = soma das apostas das partidas abertas em que ele entrou;
-//  4. o total guardado na configuracao (tetos) = depositado - sacado;
-//  5. liquidacao paga certo: vencedor +2x aposta, empate devolve, perdedor nada;
-//  6. todo ataque falha (sacar do cofre de outro, apostar no cofre de outro, arbitro falso, chave revogada...).
+//  4. o total guardado na configuracao (tetos) = depositado - sacado - taxas;
+//  5. liquidacao paga certo: vencedor +2x aposta - taxa do par (bps das duas apostas), empate devolve, perdedor nada;
+//  6. todo ataque falha (sacar do cofre de outro, apostar no cofre de outro, arbitro falso, chave revogada, desviar
+//     a taxa da partida ou liquidar sem ela...).
 // Rodar: FUZZ=1 PASSOS=400 SEMENTE=7 npm test (scripts/testar.sh). Reproduzivel pela SEMENTE.
 import * as anchor from '@coral-xyz/anchor';
 import { BN, Program } from '@coral-xyz/anchor';
@@ -61,6 +63,9 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
   // Modelo: o que o teste sabe que aconteceu (so atualiza quando a operacao deu certo)
   let depositado = 0n;
   let sacado = 0n;
+  let taxasCobradas = 0n;
+  let bps = 500n; // taxa das partidas (pontos-base do pote)
+  const taxaDoPar = (aposta: bigint) => (2n * aposta * bps) / 10_000n;
   interface PartidaModelo { id: number; a: Par[]; b: Par[]; aposta: bigint; entrou: Set<string>; aberta: boolean }
   const partidas: PartidaModelo[] = [];
   let proximoId = 1;
@@ -94,9 +99,11 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
       const travadoModelo = abertas().filter((p) => p.entrou.has(id58(k))).reduce((s, p) => s + p.aposta, 0n);
       expect(c.travado, onde + 'travado de ' + nome(k) + ' diferente das apostas abertas').to.equal(travadoModelo);
     }
-    expect(soma, onde + 'dinheiro sumiu ou apareceu').to.equal(depositado - sacado);
+    expect(soma, onde + 'dinheiro sumiu ou apareceu').to.equal(depositado - sacado - taxasCobradas);
+    expect(await usdc(taxasUsdc), onde + 'carteira de taxas diferente das taxas cobradas').to.equal(taxasCobradas);
     const cfg = await program.account.config.fetch(config);
-    expect(BigInt(cfg.totalNoCofre.toString()), onde + 'total do cofre na configuracao').to.equal(depositado - sacado);
+    expect(BigInt(cfg.totalNoCofre.toString()), onde + 'total do cofre na configuracao').to.equal(depositado - sacado - taxasCobradas);
+    expect(BigInt(cfg.taxaPartidaBps), onde + 'taxa na configuracao').to.equal(bps);
   }
 
   before(async () => {
@@ -110,7 +117,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
     }
     taxasUsdc = await createAssociatedTokenAccount(conn, admin, moeda, taxas.publicKey);
     const [dadosPrograma] = PublicKey.findProgramAddressSync([program.programId.toBuffer()], LOADER);
-    await program.methods.inicializar(arbitro.publicKey, taxas.publicKey, 1000, new BN(50_000_000))
+    await program.methods.inicializar(arbitro.publicKey, taxas.publicKey, 500, new BN(50_000_000))
       .accounts({ admin: admin.publicKey, dadosPrograma, moeda }).rpc();
     for (const k of todos) await program.methods.abrirCofre().accountsPartial({ dono: k.publicKey, moeda }).signers([k]).rpc();
   });
@@ -133,7 +140,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
         const saldo = c ? c.saldo : 0n;
         const valor = sorteia([saldo, saldo / 2n, saldo + 1n, 0n, 1_000_000n])!;
         const ok = await tentar(program.methods.sacar(new BN(valor.toString()))
-          .accountsPartial({ dono: k.publicKey, destino: ata.get(kid)!, destinoTaxas: taxasUsdc, config }).signers([k]).rpc());
+          .accountsPartial({ dono: k.publicKey, destino: ata.get(kid)!, config }).signers([k]).rpc());
         if (ok) sacado += valor;
       } else if (r < 0.32) {
         op = 'autorizar chave';
@@ -193,16 +200,19 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
           const ordem = [...p.a, ...p.b];
           const antes = await Promise.all(ordem.map((x) => cofre(x.publicKey)));
           const contas = ordem.flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
+          const taxa = resultado === 0 ? 0n : taxaDoPar(p.aposta);
+          if (taxa > 0n) contas.push({ pubkey: taxasUsdc, isSigner: false, isWritable: true });
           const ok = await tentar(program.methods.liquidarPartida(resultado, null)
             .accountsPartial({ partida: partidaDe(p.id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
             .remainingAccounts(contas).signers([arbitro]).rpc());
           if (ok) {
             expect(p.entrou.size, 'passo ' + passo + ': liquidou partida que nao estava travada por todos').to.equal(ordem.length);
             p.aberta = false;
+            taxasCobradas += taxa * BigInt(p.a.length);
             const depois = await Promise.all(ordem.map((x) => cofre(x.publicKey)));
             ordem.forEach((x, i) => {
               const doA = i < p.a.length;
-              const ganho = resultado === 0 ? p.aposta : (resultado === 1) === doA ? 2n * p.aposta : 0n;
+              const ganho = resultado === 0 ? p.aposta : (resultado === 1) === doA ? 2n * p.aposta - taxa : 0n;
               expect(depois[i]!.saldo - antes[i]!.saldo, 'passo ' + passo + ': pagamento errado para ' + nome(x)).to.equal(ganho);
             });
           }
@@ -218,25 +228,28 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
           if (ok) p.aberta = false;
         }
       } else if (r < 0.86) {
-        op = 'mudar tetos';
+        op = 'mudar tetos e taxa';
         const porCofre = sorteia([0, 0, 100, 300])!;
         const total = sorteia([0, 0, 2000, 5000])!;
-        await tentar(program.methods.atualizarConfig(null, null, null, null, null, new BN(porCofre * 1_000_000), new BN(total * 1_000_000))
+        const novaTaxa = sorteia([500, 500, 0, 1000, 1001])!; // 1001 passa do teto: deve falhar
+        const ok = await tentar(program.methods.atualizarConfig(null, null, novaTaxa, null, null, new BN(porCofre * 1_000_000), new BN(total * 1_000_000))
           .accountsPartial({ config }).rpc());
+        expect(ok, 'passo ' + passo + ': taxa ' + novaTaxa + ' aceita/recusada errado').to.equal(novaTaxa <= 1000);
+        if (ok) bps = BigInt(novaTaxa);
       } else {
         // ---------- Ataques: todos tem de falhar ----------
         const vitima = sorteia(jogadores)!;
-        const tipo = inteiro(0, 6);
+        const tipo = inteiro(0, 8);
         op = 'ataque ' + tipo;
         if (tipo === 0) {
           await deveFalhar('sacar do cofre de outro para a propria conta', program.methods.sacar(new BN(1_000_000)).accountsPartial({
             dono: atacante.publicKey, cofre: cofreDe(vitima.publicKey), tokens: tokensDe(vitima.publicKey),
-            destino: ata.get(id58(atacante))!, destinoTaxas: taxasUsdc, config,
+            destino: ata.get(id58(atacante))!, config,
           }).signers([atacante]).rpc());
         } else if (tipo === 1) {
           // A instrucao diz que o dono e a vitima, mas quem assina e o atacante (a vitima nao assina)
           const ix = await program.methods.sacar(new BN(1_000_000)).accountsPartial({
-            dono: vitima.publicKey, destino: ata.get(id58(vitima))!, destinoTaxas: taxasUsdc, config,
+            dono: vitima.publicKey, destino: ata.get(id58(vitima))!, config,
           }).instruction();
           ix.keys.forEach((x) => { if (x.pubkey.equals(vitima.publicKey)) x.isSigner = false; });
           await deveFalhar('sacar do cofre de outro sem a assinatura dele', provider.sendAndConfirm(new anchor.web3.Transaction().add(ix), [atacante]));
@@ -271,6 +284,17 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
           await deveFalhar('depositar com a conta de USDC de outro', program.methods.depositar(new BN(1_000_000)).accountsPartial({
             dono: atacante.publicKey, origem: ata.get(id58(vitima))!, config,
           }).signers([atacante]).rpc());
+        } else if (tipo === 7 || tipo === 8) {
+          // Liquidacao com vencedor feita pelo arbitro de verdade, mas desviando a taxa (para o atacante ou para o
+          // proprio vencedor) ou sem a conta da carteira de taxas: tem de falhar
+          const p = abertas().find((x) => x.entrou.size === x.a.length + x.b.length);
+          if (p && bps > 0n) {
+            const contas = [...p.a, ...p.b].flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
+            if (tipo === 7) contas.push({ pubkey: sorteia([ata.get(id58(atacante))!, tokensDe(p.a[0]!.publicKey), ata.get(id58(p.a[0]!))!])!, isSigner: false, isWritable: true });
+            await deveFalhar(tipo === 7 ? 'desviar a taxa da partida' : 'liquidar com vencedor sem a conta de taxas', program.methods.liquidarPartida(1, null)
+              .accountsPartial({ partida: partidaDe(p.id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+              .remainingAccounts(contas).signers([arbitro]).rpc());
+          }
         } else {
           await deveFalhar('trancar/destrancar o saldo de outro', program.methods.trancarSaldo(false)
             .accountsPartial({ cofre: cofreDe(vitima.publicKey), dono: atacante.publicKey }).signers([atacante]).rpc());
