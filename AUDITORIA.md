@@ -7,9 +7,9 @@ Documento para pedir orçamentos de auditoria independente do programa Solana `c
 - **Arquivo:** `programs/cofre/src/lib.rs` (~800 linhas). Chama só o System Program e o SPL Token clássico.
 - **Tamanho:** 82,2 KB (depósito na rede ~0,57 SOL).
 - **Moeda:** USDC (SPL Token clássico), gravada na inicialização e imutável.
-- **Instruções (17):**
+- **Instruções (18):**
   - Config: `inicializar` (só a autoridade de atualização), `atualizar_config`, `propor_admin`, `aceitar_admin`.
-  - Cofre: `abrir_cofre`, `depositar`, `sacar`, `fechar_cofre`, `trancar_saldo`.
+  - Cofre: `abrir_cofre`, `depositar`, `sacar`, `fechar_cofre`, `trancar_saldo`, `comprar` (compra na plataforma).
   - Chave de aposta: `autorizar_sessao`, `revogar_sessao`, `entrar_partida_sessao`.
   - Partidas: `criar_partida`, `entrar_partida`, `liquidar_partida`, `cancelar_partida`.
 - **Contas (PDAs):** `Config` (`config`), `Cofre` por usuário (`cofre`+dono) com a conta de tokens (`tokens`+dono), `Sessao` (`sessao`+dono+chave), `Partida` (`partida`+id u64).
@@ -21,6 +21,7 @@ Documento para pedir orçamentos de auditoria independente do programa Solana `c
 4. **Árbitro (servidor):** cria partidas e informa o resultado e quem abandonou; o valor travado só se move entre os jogadores daquela partida, com duas saídas, ambas só para a conta de tokens da carteira de taxas configurada: a **taxa da partida** (item 6) e a **pool de abandono** (o que quem abandonou receberia vai para a conta de tokens da carteira de taxas configurada; nunca mais que a parte dele, nunca todos os jogadores; os outros recebem o mesmo). Aposta com teto (`teto_aposta`). Não saca nem trava aposta de ninguém. Risco aceito: um árbitro comprometido poderia marcar abandono falso e mandar a parte de alguém para a carteira de taxas (limitado à aposta daquela partida; cada caso fica público na transação e na pool).
 5. **Prazos:** se o árbitro não liquidar em 24 h (ou a partida não encher em 10 min), qualquer um cancela e todos recebem de volta.
 6. **Taxa (desde 26/10/2026):** só nas partidas com vencedor: `taxa_partida_bps` do pote (as apostas dos dois times), tirada do que o time vencedor recebe, por par perdedor → vencedor (`2 × aposta × bps / 10000`, arredondado para baixo), com teto fixo de 10% do pote no código, só para a conta de tokens da carteira de taxas configurada. Empate, cancelamento, depósito e saque: sem taxa. Com taxa > 0, a liquidação com vencedor exige a conta da carteira de taxas (número exato de contas).
+6a. **Compra na plataforma (cosméticos, desde 26/10/2026):** `comprar(valor, pedido)` só com a assinatura da wallet do dono (a chave de aposta não compra), só do saldo livre, só para a conta de tokens da carteira de taxas configurada, no máximo 100 USDC por compra (fixo no código) e nunca com o programa pausado.
 7. **Tetos de depósito (opcionais, 0 = sem teto):** por cofre e total; só barram depósito, nunca saque, aposta ou pagamento.
 8. **Administração:** só a autoridade de atualização inicializa; troca de admin em duas etapas; a moeda não muda.
 9. **Contabilidade:** tokens da conta do cofre = `saldo` + `travado` em qualquer sequência de operações; `total_no_cofre` = depositado − sacado − taxas − pool; a carteira de taxas recebe exatamente as taxas cobradas.
@@ -29,7 +30,7 @@ Documento para pedir orçamentos de auditoria independente do programa Solana `c
 Em toda conta recebida: dono = programa, identificador de 8 bytes, tamanho mínimo, endereço (PDA) recalculado com o bump gravado e as sementes do dono/chave, e quem assina. Contas de token: programa de token clássico, 165 bytes, estado inicializado, dono e moeda. Criação de PDA trata SOL mandado antes para o endereço. Contas fechadas zeram dados e voltam ao System Program (sem "ressuscitar" na mesma transação).
 
 ## Testes
-- `npm test` (`scripts/testar.sh`): **25 testes**, um por regra, incluindo as fraudes (sacar do cofre de outro, taxa da partida desviada para outra conta ou liquidação sem a conta de taxas, liquidar com contas trocadas ou fora de ordem, pagador errado, aposta acima do teto, jogador repetido, contas imitadas, dados cortados, SOL mandado antes ao endereço do cofre, chave de aposta em cofre alheio, chave revogada, trancar o saldo de outro, tetos).
+- `npm test` (`scripts/testar.sh`): **26 testes**, um por regra, incluindo as fraudes (sacar do cofre de outro, taxa da partida desviada para outra conta ou liquidação sem a conta de taxas, liquidar com contas trocadas ou fora de ordem, pagador errado, aposta acima do teto, jogador repetido, contas imitadas, dados cortados, SOL mandado antes ao endereço do cofre, chave de aposta em cofre alheio, chave revogada, trancar o saldo de outro, tetos).
 - **Teste de ataque aleatório** (`tests/fuzz.ts`, `TESTES=tests/fuzz.ts PASSOS=1500 SEMENTE=n npm test`): sorteia operações válidas e maliciosas e confere, depois de **cada** passo, as invariantes 1–9 (tokens = saldo + travado em todo cofre; soma dos cofres = depositado − sacado; travado = apostas abertas; total da config; pagamento exato da liquidação: vencedor +2× aposta − taxa do par, empate devolve, perdedor nada; carteira de taxas = taxas cobradas; taxa mudada ao acaso entre 0, 5% e 10%) e que todo ataque falha (inclusive desviar a taxa ou liquidar sem a conta de taxas).
 
 ## Revisão interna de 22/10/2026 (resultado)
@@ -62,3 +63,6 @@ Em toda conta recebida: dono = programa, identificador de 8 bytes, tamanho míni
 - **Decisão do dono:** a taxa da plataforma saiu do saque (10%) e foi para as partidas com vencedor: **5% do pote** (`taxa_partida_bps = 500`), teto fixo de **10% do pote** no código (`TAXA_MAXIMA_BPS = 1000`). O campo da configuração continua no mesmo lugar (byte 104), com o novo significado.
 - **Contrato:** `sacar` não cobra nada e não recebe mais a conta da carteira de taxas (6 contas). `liquidar_partida`: em cada par perdedor → vencedor, o perdedor manda `aposta − taxa_par` ao vencedor e `taxa_par` à carteira de taxas (se o vencedor abandonou, a aposta inteira vai para a carteira de taxas: taxa + pool); a configuração vem gravável e `total_no_cofre` diminui pela taxa + pool. Empate: sem taxa (a conta de taxas a mais é recusada).
 - **Testes:** 25 (novos: liquidação 1x1 com taxa e as tentativas de desvio; 2x2 com 5%, 10% e 0%; arredondamento para baixo; empate sem taxa; saque sem taxa) e o teste de ataque aleatório com as invariantes da taxa.
+
+## Antes de trancar o contrato (26/10/2026)
+- Plano do dono: tirar a autoridade de atualização (contrato imutável) depois de definir todas as regras. Para isso: instrução `comprar` (cosméticos) e `aluguel_minimo` aceitando qualquer limite de isenção que a rede adotar no futuro (antes, só 1,0 e 2,0: um contrato imutável pararia de abrir cofres se a rede mudasse o aluguel). 26 testes; ataque aleatório sementes 7, 11 e 42 (427 ataques barrados) com as compras nas invariantes.
