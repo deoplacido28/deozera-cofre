@@ -438,6 +438,52 @@ describe('cofre', () => {
     expect(r4.d).to.deep.equal([450_001, 450_001, -500_001, -500_001]);
   });
 
+  it('compra na plataforma: so a wallet do dono, so do saldo livre, so para a carteira de taxas, ate 100 USDC, nunca pausado', async () => {
+    const comprar = (k: anchor.web3.Keypair, valor: BN, extra: Record<string, Chave> = {}) => program.methods.comprar(valor, new BN(7))
+      .accountsPartial({ dono: k.publicKey, destinoTaxas: taxasUsdc, ...extra }).signers([k]).rpc();
+    const foto = async () => ({
+      saldo: (await cofre(alice.publicKey)).saldo.toNumber(), tokens: await usdc(tokensDe(alice.publicKey)), t: await usdc(taxasUsdc),
+      total: (await program.account.config.fetch(config)).totalNoCofre.toNumber(),
+    });
+    const antes = await foto();
+    await comprar(alice, USDC(2));
+    const depois = await foto();
+    expect(antes.saldo - depois.saldo).to.equal(2_000_000);
+    expect(antes.tokens - depois.tokens).to.equal(2_000_000);
+    expect(depois.t - antes.t).to.equal(2_000_000);
+    expect(antes.total - depois.total).to.equal(2_000_000);
+
+    // Desvios: so a carteira de taxas recebe (nem outra conta, nem a propria conta do jogador)
+    await falha(comprar(alice, USDC(1), { destinoTaxas: ata[carol.publicKey.toBase58()] }), 'CarteiraDeTaxasErrada');
+    await falha(comprar(alice, USDC(1), { destinoTaxas: ata[alice.publicKey.toBase58()] }), 'CarteiraDeTaxasErrada');
+    // Outro assinando com o cofre da Alice; a chave de aposta da Alice no lugar da wallet
+    await falha(program.methods.comprar(USDC(1), new BN(7)).accountsPartial({ dono: bob.publicKey, cofre: cofreDe(alice.publicKey),
+      tokens: tokensDe(alice.publicKey), destinoTaxas: taxasUsdc }).signers([bob]).rpc(), 'NaoAutorizado');
+    const chave = Keypair.generate();
+    await program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao: sessaoDe(alice.publicKey, chave.publicKey), dono: alice.publicKey }).signers([alice]).rpc();
+    await falha(program.methods.comprar(USDC(1), new BN(7)).accountsPartial({ dono: chave.publicKey, cofre: cofreDe(alice.publicKey),
+      tokens: tokensDe(alice.publicKey), destinoTaxas: taxasUsdc }).signers([chave]).rpc(), 'NaoAutorizado');
+    // Sem a assinatura da Alice (so a carteira do teste assina e paga)
+    const ix = await program.methods.comprar(USDC(1), new BN(7)).accountsPartial({ dono: alice.publicKey, destinoTaxas: taxasUsdc }).instruction();
+    ix.keys.forEach((k) => { if (k.pubkey.equals(alice.publicKey)) k.isSigner = false; });
+    await falha(provider.sendAndConfirm(new anchor.web3.Transaction().add(ix)), 'NaoAutorizado');
+    // Teto fixo por compra
+    await falha(comprar(alice, new BN(100_000_001)), 'CompraAcimaDoTeto');
+    await falha(comprar(alice, new BN(0)), 'ValorInvalido');
+    // So o saldo livre: com aposta travada, nao compra alem do livre
+    await program.methods.criarPartida(new BN(40), USDC(3), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(40), jogador: alice.publicKey }).signers([alice]).rpc();
+    const livre = (await cofre(alice.publicKey)).saldo.toNumber();
+    await falha(comprar(alice, new BN(livre + 1)), 'SaldoInsuficiente');
+    await program.methods.cancelarPartida().accountsPartial({ partida: partidaDe(40), quem: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts([{ pubkey: cofreDe(alice.publicKey), isSigner: false, isWritable: true }]).signers([arbitro]).rpc();
+    // Pausado: nao compra (o saque continua)
+    await program.methods.atualizarConfig(null, null, null, null, true, null, null).accountsPartial({ config }).rpc();
+    await falha(comprar(alice, USDC(1)), 'Pausado');
+    await sacar(alice, USDC(1));
+    await program.methods.atualizarConfig(null, null, null, null, false, null, null).accountsPartial({ config }).rpc();
+  });
+
   it('troca de admin em duas etapas', async () => {
     const novo = Keypair.generate();
     await program.methods.proporAdmin(novo.publicKey).accountsPartial({ config }).rpc();

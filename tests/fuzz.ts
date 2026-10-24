@@ -1,8 +1,8 @@
 // Teste de ataque aleatorio ("fuzzing") do cofre: sorteia centenas de operacoes, validas e maliciosas, e depois de
 // CADA uma confere as regras que nunca podem quebrar:
 //  1. o saldo de cada cofre (livre + travado) e exatamente o que esta na conta de tokens dele;
-//  2. nada some nem aparece: soma dos cofres = depositado - sacado - taxas das partidas; a carteira de taxas tem
-//     exatamente as taxas cobradas (saque nao tem taxa);
+//  2. nada some nem aparece: soma dos cofres = depositado - sacado - taxas das partidas - compras; a carteira de
+//     taxas tem exatamente as taxas cobradas + as compras (saque nao tem taxa);
 //  3. o travado de cada jogador = soma das apostas das partidas abertas em que ele entrou;
 //  4. o total guardado na configuracao (tetos) = depositado - sacado - taxas;
 //  5. liquidacao paga certo: vencedor +2x aposta - taxa do par (bps das duas apostas), empate devolve, perdedor nada;
@@ -64,6 +64,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
   let depositado = 0n;
   let sacado = 0n;
   let taxasCobradas = 0n;
+  let compras = 0n; // compras na plataforma (cosmeticos), pagas do saldo livre para a carteira de taxas
   let bps = 500n; // taxa das partidas (pontos-base do pote)
   const taxaDoPar = (aposta: bigint) => (2n * aposta * bps) / 10_000n;
   interface PartidaModelo { id: number; a: Par[]; b: Par[]; aposta: bigint; entrou: Set<string>; aberta: boolean }
@@ -99,10 +100,10 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
       const travadoModelo = abertas().filter((p) => p.entrou.has(id58(k))).reduce((s, p) => s + p.aposta, 0n);
       expect(c.travado, onde + 'travado de ' + nome(k) + ' diferente das apostas abertas').to.equal(travadoModelo);
     }
-    expect(soma, onde + 'dinheiro sumiu ou apareceu').to.equal(depositado - sacado - taxasCobradas);
-    expect(await usdc(taxasUsdc), onde + 'carteira de taxas diferente das taxas cobradas').to.equal(taxasCobradas);
+    expect(soma, onde + 'dinheiro sumiu ou apareceu').to.equal(depositado - sacado - taxasCobradas - compras);
+    expect(await usdc(taxasUsdc), onde + 'carteira de taxas diferente das taxas + compras').to.equal(taxasCobradas + compras);
     const cfg = await program.account.config.fetch(config);
-    expect(BigInt(cfg.totalNoCofre.toString()), onde + 'total do cofre na configuracao').to.equal(depositado - sacado - taxasCobradas);
+    expect(BigInt(cfg.totalNoCofre.toString()), onde + 'total do cofre na configuracao').to.equal(depositado - sacado - taxasCobradas - compras);
     expect(BigInt(cfg.taxaPartidaBps), onde + 'taxa na configuracao').to.equal(bps);
   }
 
@@ -134,6 +135,17 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
         const ok = await tentar(program.methods.depositar(new BN(valor.toString()))
           .accountsPartial({ dono: k.publicKey, origem: ata.get(kid)!, config }).signers([k]).rpc());
         if (ok) depositado += valor;
+      } else if (r < 0.20) {
+        op = 'comprar';
+        const c = await cofre(k.publicKey);
+        const saldo = c ? c.saldo : 0n;
+        const valor = sorteia([1_000_000n, saldo, saldo + 1n, 0n, 100_000_001n, 5_000_000n])!;
+        const ok = await tentar(program.methods.comprar(new BN(valor.toString()), new BN(passo))
+          .accountsPartial({ dono: k.publicKey, destinoTaxas: taxasUsdc, config }).signers([k]).rpc());
+        if (ok) {
+          expect(valor > 0n && valor <= 100_000_000n && valor <= saldo, 'passo ' + passo + ': compra de ' + valor + ' aceita com saldo ' + saldo).to.equal(true);
+          compras += valor;
+        }
       } else if (r < 0.26) {
         op = 'sacar';
         const c = await cofre(k.publicKey);
@@ -239,7 +251,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
       } else {
         // ---------- Ataques: todos tem de falhar ----------
         const vitima = sorteia(jogadores)!;
-        const tipo = inteiro(0, 8);
+        const tipo = inteiro(0, 10);
         op = 'ataque ' + tipo;
         if (tipo === 0) {
           await deveFalhar('sacar do cofre de outro para a propria conta', program.methods.sacar(new BN(1_000_000)).accountsPartial({
@@ -295,6 +307,14 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
               .accountsPartial({ partida: partidaDe(p.id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
               .remainingAccounts(contas).signers([arbitro]).rpc());
           }
+        } else if (tipo === 9) {
+          await deveFalhar('comprar com o cofre de outro', program.methods.comprar(new BN(1_000_000), new BN(passo)).accountsPartial({
+            dono: atacante.publicKey, cofre: cofreDe(vitima.publicKey), tokens: tokensDe(vitima.publicKey), destinoTaxas: taxasUsdc, config,
+          }).signers([atacante]).rpc());
+        } else if (tipo === 10) {
+          await deveFalhar('compra mandando o dinheiro para outra conta', program.methods.comprar(new BN(1_000_000), new BN(passo)).accountsPartial({
+            dono: vitima.publicKey, destinoTaxas: ata.get(id58(atacante))!, config,
+          }).signers([vitima]).rpc());
         } else {
           await deveFalhar('trancar/destrancar o saldo de outro', program.methods.trancarSaldo(false)
             .accountsPartial({ cofre: cofreDe(vitima.publicKey), dono: atacante.publicKey }).signers([atacante]).rpc());

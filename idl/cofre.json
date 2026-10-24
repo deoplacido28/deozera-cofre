@@ -2,7 +2,7 @@
   "address": "E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX",
   "metadata": {
     "name": "cofre",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "spec": "0.1.0",
     "description": "Cofre DeoZERA (Pinocchio). Interface igual a versao Anchor; campos de tamanho variavel no fim das contas."
   },
@@ -1256,6 +1256,118 @@
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "comprar",
+      "docs": [
+        "Compra na plataforma (cosmeticos): o dono, assinando com a WALLET, paga valor do saldo livre para a conta de tokens",
+        "da carteira de taxas configurada. No maximo 100 USDC por compra (fixo no codigo); nunca com o programa pausado.",
+        "pedido identifica a compra (fica so nos dados da transacao)."
+      ],
+      "discriminator": [
+        191,
+        136,
+        113,
+        101,
+        39,
+        7,
+        81,
+        50
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          },
+          "writable": true
+        },
+        {
+          "name": "cofre",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  102,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokens",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dono"
+              }
+            ]
+          }
+        },
+        {
+          "name": "destino_taxas",
+          "docs": [
+            "Para onde vai o pagamento: so a conta de tokens da carteira de taxas configurada."
+          ],
+          "writable": true
+        },
+        {
+          "name": "dono",
+          "signer": true,
+          "relations": [
+            "cofre"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "valor",
+          "type": "u64"
+        },
+        {
+          "name": "pedido",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1427,6 +1539,11 @@
       "code": 6022,
       "name": "AbandonoInvalido",
       "msg": "Abandono invalido: so jogadores da partida e nunca todos"
+    },
+    {
+      "code": 6023,
+      "name": "CompraAcimaDoTeto",
+      "msg": "Compra acima do teto (100 USDC por compra)"
     }
   ],
   "types": [

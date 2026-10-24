@@ -18,6 +18,10 @@
 //! 6. A taxa e cobrada so nas partidas com vencedor: uma porcentagem do pote (as apostas dos dois times), tirada do
 //!    que o time vencedor recebe, com teto fixo no codigo, e vai para a carteira de taxas configurada. Empate,
 //!    cancelamento, deposito e saque nao tem taxa.
+//! 6a. Compra na plataforma (cosmeticos): so com a assinatura da WALLET do dono (a chave de aposta nao compra, o
+//!     servidor nao compra), so do saldo livre (nunca do travado), so para a conta de tokens da carteira de taxas
+//!     configurada, no maximo TETO_COMPRA por compra (fixo no codigo) e nunca com o programa pausado. O numero do
+//!     pedido vai nos dados da instrucao (fica na transacao, para conferir qual item foi comprado).
 //! 6b. Tetos opcionais de deposito (para testes e beta; 0 = sem teto): saldo por cofre e total guardado no programa.
 //!     So barram DEPOSITO: saque, aposta e pagamento de partida nunca sao barrados por teto.
 //! 7. So a autoridade de atualizacao do programa inicializa; troca de admin em duas etapas.
@@ -67,6 +71,8 @@ const CARREGADOR: Pubkey = pinocchio_pubkey::pubkey!("BPFLoaderUpgradeab1e111111
 
 /// Teto fixo da taxa das partidas: 10% do pote (1000 pontos-base). Nem o admin passa disso.
 const TAXA_MAXIMA_BPS: u16 = 1_000;
+/// Teto fixo de cada compra na plataforma (cosmeticos): 100 USDC (6 casas). Nem o admin muda.
+const TETO_COMPRA: u64 = 100_000_000;
 /// Jogadores por time (1x1 ate 4x4).
 const MAX_POR_TIME: usize = 4;
 /// Prazo para todos travarem a aposta depois que a partida e criada.
@@ -95,6 +101,7 @@ const IX_AUTORIZAR_SESSAO: [u8; 8] = [139, 28, 181, 98, 127, 54, 183, 177];
 const IX_REVOGAR_SESSAO: [u8; 8] = [7, 186, 113, 13, 231, 151, 185, 159];
 const IX_ENTRAR_PARTIDA_SESSAO: [u8; 8] = [221, 212, 66, 42, 40, 133, 189, 19];
 const IX_TRANCAR_SALDO: [u8; 8] = [30, 221, 97, 4, 225, 54, 127, 229];
+const IX_COMPRAR: [u8; 8] = [191, 136, 113, 101, 39, 7, 81, 50];
 
 // Formato das contas (offsets em bytes). Os campos de tamanho variavel ficam no fim, entao todo o resto tem
 // posicao fixa e continua legivel pelo formato Borsh descrito no IDL.
@@ -142,6 +149,7 @@ enum Erro {
     AcimaDoTetoDeSaldo,
     CofreCheio,
     AbandonoInvalido,
+    CompraAcimaDoTeto,
 }
 impl From<Erro> for ProgramError {
     fn from(e: Erro) -> Self {
@@ -394,15 +402,21 @@ fn criar_pda(pagador: &AccountInfo, conta: &AccountInfo, tam: usize, dono: &Pubk
     Assign { account: conta, owner: dono }.invoke_signed(&assinante)
 }
 
-/// Deposito minimo da rede para a conta nao ser cobrada (mesma conta do Rent::minimum_balance, so com inteiros:
-/// o limite de isencao e 2 anos hoje e 1 depois da SIMD-0194; outro valor = erro, nunca um deposito menor).
+/// Deposito minimo da rede para a conta nao ser cobrada (mesma conta do Rent::minimum_balance). Os dois limites de
+/// isencao conhecidos (2 anos hoje, 1 depois da SIMD-0194) saem so com inteiros; qualquer outro que a rede adote no
+/// futuro usa a mesma formula da rede em ponto flutuante (26/10/2026: o contrato vai ser trancado para sempre e nao
+/// pode parar de abrir cofres se a rede mudar o aluguel). Se a conta der menos que a rede exige, a criacao falha.
 fn aluguel_minimo(tam: usize) -> R<u64> {
     let r = Rent::get()?;
     let base = (128 + tam as u64).checked_mul(r.lamports_per_byte_year).ok_or(Erro::Overflow)?;
     match r.exemption_threshold.to_bits() {
         0x4000_0000_0000_0000 => base.checked_mul(2).ok_or_else(|| Erro::Overflow.into()), // 2,0
         0x3FF0_0000_0000_0000 => Ok(base), // 1,0
-        _ => Err(ProgramError::InvalidAccountData),
+        _ => {
+            let limite = r.exemption_threshold;
+            exigir(limite >= 0.0 && limite <= 1_000.0, Erro::Overflow)?; // valor absurdo ou NaN: recusa
+            Ok((base as f64 * limite) as u64)
+        }
     }
 }
 
@@ -453,6 +467,7 @@ fn processar(programa: &Pubkey, contas: &[AccountInfo], dados: &[u8]) -> Program
         IX_REVOGAR_SESSAO => revogar_sessao(contas),
         IX_ENTRAR_PARTIDA_SESSAO => entrar_partida_sessao(contas, &mut args),
         IX_TRANCAR_SALDO => trancar_saldo(contas, &mut args),
+        IX_COMPRAR => comprar(contas, &mut args),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
@@ -654,6 +669,37 @@ fn sacar(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
     let sementes = [Seed::from(b"cofre"), Seed::from(dono.key()), Seed::from(&b)];
     let assinante = [Signer::from(&sementes)];
     Transfer { from: tokens, to: destino, authority: cofre, amount: valor }.invoke_signed(&assinante)
+}
+
+/// Compra na plataforma (regra 6a): o dono, assinando com a WALLET, paga `valor` do saldo livre para a conta de tokens
+/// da carteira de taxas. `pedido` identifica a compra (fica so nos dados da transacao). Contas: config (gravavel),
+/// cofre, tokens do cofre, conta de tokens da carteira de taxas, dono (assina), programa de token.
+fn comprar(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
+    let [config, cofre, tokens, destino_taxas, dono, programa_token, ..] = contas else { return Err(ProgramError::NotEnoughAccountKeys) };
+    let valor = args.u64()?;
+    let _pedido = args.u64()?;
+    args.fim()?;
+    let mut cfg = ler_config(config)?;
+    let mut c = ler_cofre(cofre, dono.key(), Erro::NaoAutorizado)?;
+    conferir_tokens_do_cofre(tokens, dono.key(), c.bump_tokens)?;
+    conferir_conta_de(destino_taxas, &cfg.carteira_taxas, &cfg.moeda, Erro::CarteiraDeTaxasErrada)?;
+    exigir(dono.is_signer(), Erro::NaoAutorizado)?;
+    conferir_programa(programa_token, &TOKEN)?;
+    exigir(!cfg.pausado, Erro::Pausado)?;
+    exigir(valor > 0, Erro::ValorInvalido)?;
+    exigir(valor <= TETO_COMPRA, Erro::CompraAcimaDoTeto)?;
+    exigir(c.saldo >= valor, Erro::SaldoInsuficiente)?; // so o livre: o travado nas partidas nao entra
+
+    c.saldo -= valor;
+    gravar_saldos(cofre, &c)?;
+    if cfg.com_tetos {
+        exigir(config.is_writable(), Erro::ContasInvalidas)?;
+        cfg.total_no_cofre = cfg.total_no_cofre.saturating_sub(valor);
+        gravar_config(config, &cfg)?;
+    }
+    let b = [c.bump];
+    let sementes = [Seed::from(b"cofre"), Seed::from(dono.key()), Seed::from(&b)];
+    Transfer { from: tokens, to: destino_taxas, authority: cofre, amount: valor }.invoke_signed(&[Signer::from(&sementes)])
 }
 
 /// Fecha o cofre vazio: qualquer sobra de tokens (ex.: enviada direto por alguem) vai para o dono,
