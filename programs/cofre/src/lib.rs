@@ -11,12 +11,15 @@
 //!    "Saldo trancado" (so o dono tranca e destranca, pela wallet): nenhuma chave de aposta aposta.
 //! 4. O arbitro (servidor) so informa o resultado e quem abandonou: o valor travado se move entre os jogadores
 //!    daquela partida; as unicas saidas sao a taxa da partida (6) e a pool de abandono (4b). Aposta tem teto.
+//!    A partida tem de 2 a 8 "lados" do mesmo tamanho (no maximo 8 jogadores somando todos): dois times (1x1 ate
+//!    4x4, o formato original) ou varios lados, por exemplo 3 ou 4 jogadores cada um por si. Vence um lado so, ou
+//!    ninguem (empate: todos recebem de volta).
 //! 4b. Pool de abandono: quem abandona a partida nao recebe nada dela. O que ele receberia (a propria aposta de
 //!     volta e, se o time venceu, o premio) vai para a carteira de taxas. Os outros jogadores recebem exatamente o
 //!     mesmo que receberiam sem o abandono. Nunca mais que a parte dele; nunca todos os jogadores da partida.
 //! 5. Se o arbitro nao liquidar no prazo, qualquer um pode cancelar e cada jogador recebe a aposta de volta.
-//! 6. A taxa e cobrada so nas partidas com vencedor: uma porcentagem do pote (as apostas dos dois times), tirada do
-//!    que o time vencedor recebe, com teto fixo no codigo, e vai para a carteira de taxas configurada. Empate,
+//! 6. A taxa e cobrada so nas partidas com vencedor: uma porcentagem do pote (as apostas de todos os lados), tirada
+//!    do que o lado vencedor recebe, com teto fixo no codigo, e vai para a carteira de taxas configurada. Empate,
 //!    cancelamento, deposito e saque nao tem taxa.
 //! 6a. Compra na plataforma (cosmeticos): so com a assinatura da WALLET do dono (a chave de aposta nao compra, o
 //!     servidor nao compra), so do saldo livre (nunca do travado), so para a conta de tokens da carteira de taxas
@@ -75,6 +78,8 @@ const TAXA_MAXIMA_BPS: u16 = 1_000;
 const TETO_COMPRA: u64 = 100_000_000;
 /// Jogadores por time (1x1 ate 4x4).
 const MAX_POR_TIME: usize = 4;
+/// Jogadores por partida, somando todos os lados (o bit de cada um cabe num u8: `entrou` e `abandonos`).
+const MAX_JOGADORES: usize = 2 * MAX_POR_TIME;
 /// Prazo para todos travarem a aposta depois que a partida e criada.
 const PRAZO_ENTRAR_S: i64 = 10 * 60;
 /// Se a partida travada nao for liquidada neste prazo, qualquer um pode cancelar (todos recebem de volta).
@@ -115,7 +120,8 @@ const CONFIG_TAM: usize = CONFIG_TAM_ANTIGO + 8 * 3;
 const COFRE_TAM_ANTIGO: usize = 8 + 32 + 8 + 8 + 1 + 1;
 const COFRE_TAM: usize = COFRE_TAM_ANTIGO + 1;
 // Partida: disc | id | aposta | por_time | entrou | estado | criada_em i64 | pagador | bump | jogadores Vec (max 8)
-const PARTIDA_TAM: usize = 8 + 8 + 8 + 1 + 1 + 1 + 8 + 32 + 1 + 4 + 32 * 8;
+// Os jogadores ficam em sequencia, um lado depois do outro; numero de lados = jogadores / por_time (2 no time A x B).
+const PARTIDA_TAM: usize = 8 + 8 + 8 + 1 + 1 + 1 + 8 + 32 + 1 + 4 + 32 * MAX_JOGADORES;
 // Sessao (chave de aposta de um aparelho): disc | dono | chave | criada_em i64 | bump
 const SESSAO_TAM: usize = 8 + 32 + 32 + 8 + 1;
 const CONTA_TOKEN_TAM: usize = 165;
@@ -314,12 +320,15 @@ fn conferir_tokens_do_cofre(c: &AccountInfo, dono: &Pubkey, bump_tokens: u8) -> 
 
 struct Partida {
     aposta: u64,
+    /// Jogadores por lado.
     por_time: usize,
+    /// Numero de lados: 2 = time A x time B; 3 ou mais = varios lados (ex.: cada um por si).
+    lados: usize,
     entrou: u8,
     estado: u8,
     criada_em: i64,
     pagador: Pubkey,
-    jogadores: [Pubkey; 2 * MAX_POR_TIME],
+    jogadores: [Pubkey; MAX_JOGADORES],
     n: usize,
 }
 
@@ -333,14 +342,17 @@ fn ler_partida(c: &AccountInfo) -> R<Partida> {
     let esperado = create_program_address(&[b"partida".as_ref(), id_le.as_ref(), bump.as_ref()], &ID).map_err(|_| Erro::ContasInvalidas)?;
     exigir(&esperado == c.key(), Erro::ContasInvalidas)?;
     let n = u32::from_le_bytes(arr(&d[68..72])) as usize;
-    exigir(n >= 2 && n <= 2 * MAX_POR_TIME, Erro::ContasInvalidas)?;
-    let mut jogadores = [[0u8; 32]; 2 * MAX_POR_TIME];
+    let por_time = d[24] as usize;
+    // Lados do mesmo tamanho, pelo menos 2 (o criar_partida so grava assim; conferido de novo por seguranca)
+    exigir(n <= MAX_JOGADORES && por_time >= 1 && n % por_time == 0 && n / por_time >= 2, Erro::ContasInvalidas)?;
+    let mut jogadores = [[0u8; 32]; MAX_JOGADORES];
     for (k, j) in jogadores.iter_mut().enumerate().take(n) {
         *j = ler_chave(&d, 72 + 32 * k);
     }
     Ok(Partida {
         aposta: ler_u64(&d, 16),
-        por_time: d[24] as usize,
+        por_time,
+        lados: n / por_time,
         entrou: d[25],
         estado: d[26],
         criada_em: ler_u64(&d, 27) as i64,
@@ -432,12 +444,13 @@ fn agora() -> R<i64> {
     Ok(Clock::get()?.unix_timestamp)
 }
 
-/// Taxa de um par perdedor -> vencedor: `bps` (pontos-base) das duas apostas do par, arredondada para baixo.
-/// Somando os pares, da `bps` do pote inteiro. Com bps <= 1000, nunca passa de 20% de uma aposta.
-fn taxa_do_par(aposta: u64, bps: u16) -> R<u64> {
-    let par = aposta.checked_mul(2).ok_or(Erro::Overflow)?;
+/// Taxa de cada jogador do lado vencedor: `bps` (pontos-base) de uma aposta por lado (a dele + a de quem paga a ele
+/// em cada lado perdedor), arredondada para baixo. Somando os vencedores, da `bps` do pote inteiro. Com dois lados e
+/// a taxa do par perdedor -> vencedor de antes. Com bps <= 1000 e ate 8 lados, nunca passa de 80% de uma aposta.
+fn taxa_do_vencedor(aposta: u64, lados: usize, bps: u16) -> R<u64> {
+    let fatia = aposta.checked_mul(lados as u64).ok_or(Erro::Overflow)?;
     let bps = bps as u64;
-    Ok((par / 10_000) * bps + (par % 10_000) * bps / 10_000) // = par * bps / 10000, sem estourar u64
+    Ok((fatia / 10_000) * bps + (fatia % 10_000) * bps / 10_000) // = fatia * bps / 10000, sem estourar u64
 }
 
 // ---------- Entrada ----------
@@ -796,7 +809,10 @@ fn trancar_saldo(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
 
 // ---------- Partidas ----------
 
-/// O arbitro cria a partida com os times e o valor por jogador (dentro do teto).
+/// O arbitro cria a partida com os lados e o valor por jogador (dentro do teto). Dados: id, aposta, time A, time B e,
+/// opcional no fim, os outros lados (Option<Vec<Vec<Pubkey>>>; versoes antigas do servidor nao mandam). Ex.: 4
+/// jogadores cada um por si = time A [j1], time B [j2], outros [[j3], [j4]]. Todos os lados com o mesmo tamanho, no
+/// maximo 8 jogadores somando todos.
 fn criar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
     let [config, partida, arbitro, sistema, ..] = contas else { return Err(ProgramError::NotEnoughAccountKeys) };
     let cfg = ler_config(config)?;
@@ -804,17 +820,25 @@ fn criar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
     conferir_programa(sistema, &SISTEMA)?;
     let id = args.u64()?;
     let aposta = args.u64()?;
-    let mut jogadores = [[0u8; 32]; 2 * MAX_POR_TIME];
+    let mut jogadores = [[0u8; 32]; MAX_JOGADORES];
     let na = args.u32()? as usize;
     exigir(na >= 1 && na <= MAX_POR_TIME, Erro::TimesInvalidos)?;
     for j in jogadores.iter_mut().take(na) { *j = args.chave()?; }
     let nb = args.u32()? as usize;
     exigir(nb == na, Erro::TimesInvalidos)?;
     for j in jogadores.iter_mut().skip(na).take(nb) { *j = args.chave()?; }
+    let mut n = na + nb;
+    if !args.acabou() && args.tem()? {
+        let outros = args.u32()? as usize;
+        for _ in 0..outros {
+            exigir(args.u32()? as usize == na && n + na <= MAX_JOGADORES, Erro::TimesInvalidos)?;
+            for j in jogadores.iter_mut().skip(n).take(na) { *j = args.chave()?; }
+            n += na;
+        }
+    }
     args.fim()?;
     exigir(!cfg.pausado, Erro::Pausado)?;
     exigir(aposta > 0 && aposta <= cfg.teto_aposta, Erro::ApostaForaDoTeto)?;
-    let n = na + nb;
     for i in 0..n {
         for k in (i + 1)..n {
             exigir(jogadores[i] != jogadores[k], Erro::JogadorRepetido)?;
@@ -877,14 +901,15 @@ fn travar_aposta(config: &AccountInfo, partida: &AccountInfo, cofre: &AccountInf
     Ok(())
 }
 
-/// O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B) e, se houver, quem ABANDONOU a partida
-/// (Option<u8>: bit i = jogador i, na ordem da partida; versoes antigas do servidor nao mandam). Contas restantes:
-/// para CADA jogador, na ordem da partida, o cofre e a conta de tokens dele (2 por jogador); por ultimo, se houver
-/// taxa (resultado com vencedor e taxa > 0) ou abandono, a conta de tokens da carteira de taxas (e a configuracao
-/// gravavel: o total guardado diminui). Cada perdedor perde a aposta; cada vencedor recebe a dele de volta mais a
-/// aposta do perdedor correspondente menos a taxa (regra 6: taxa = porcentagem das duas apostas desse par, ou seja,
-/// do pote). No empate todos recebem de volta, sem taxa. Pool de abandono (regra 4b): quem abandonou nao recebe nada;
-/// o que ele receberia vai para a carteira de taxas; os outros recebem o mesmo. Fora isso, nada sai do grupo.
+/// O arbitro informa o resultado (0 = empate/devolve; k = o lado k venceu: 1 = time A, 2 = time B, 3 e 4 = os outros
+/// lados, na ordem da criacao) e, se houver, quem ABANDONOU a partida (Option<u8>: bit i = jogador i, na ordem da
+/// partida; versoes antigas do servidor nao mandam). Contas restantes: para CADA jogador, na ordem da partida, o cofre
+/// e a conta de tokens dele (2 por jogador); por ultimo, se houver taxa (resultado com vencedor e taxa > 0) ou
+/// abandono, a conta de tokens da carteira de taxas (e a configuracao gravavel: o total guardado diminui). Cada
+/// perdedor perde a aposta; o jogador j do lado vencedor recebe a dele de volta mais a aposta do jogador j de cada
+/// lado perdedor, menos a taxa (regra 6: porcentagem dessas apostas, ou seja, do pote). No empate todos recebem de
+/// volta, sem taxa. Pool de abandono (regra 4b): quem abandonou nao recebe nada; o que ele receberia vai para a
+/// carteira de taxas; os outros recebem o mesmo. Fora isso, nada sai do grupo.
 fn liquidar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult {
     let [config, partida, arbitro, pagador, programa_token, restantes @ ..] = contas else { return Err(ProgramError::NotEnoughAccountKeys) };
     let resultado = args.u8()?;
@@ -895,14 +920,14 @@ fn liquidar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult 
     let p = ler_partida(partida)?;
     exigir(pagador.key() == &p.pagador, Erro::ContasInvalidas)?;
     conferir_programa(programa_token, &TOKEN)?;
-    exigir(resultado <= 2, Erro::ResultadoInvalido)?;
+    exigir(resultado as usize <= p.lados, Erro::ResultadoInvalido)?;
     exigir(p.estado == TRAVADA, Erro::EstadoInvalido)?;
     // Abandono: so jogadores desta partida e nunca todos (todo mundo saindo nao tem resultado: o servidor cancela)
     exigir((abandonos as u32) >> p.n == 0 && (abandonos.count_ones() as usize) < p.n, Erro::AbandonoInvalido)?;
     let com_abandono = abandonos != 0;
-    // Taxa de cada par perdedor -> vencedor (0 no empate): porcentagem das duas apostas do par
-    let taxa_par = if resultado == 0 { 0 } else { taxa_do_par(p.aposta, cfg.taxa_partida_bps)? };
-    let com_taxas = com_abandono || taxa_par > 0;
+    // Taxa de cada vencedor (0 no empate): porcentagem de uma aposta de cada lado
+    let taxa_v = if resultado == 0 { 0 } else { taxa_do_vencedor(p.aposta, p.lados, cfg.taxa_partida_bps)? };
+    let com_taxas = com_abandono || taxa_v > 0;
     exigir(restantes.len() == 2 * p.n + com_taxas as usize, Erro::ContasInvalidas)?;
     let taxas = if com_taxas {
         let t = &restantes[2 * p.n];
@@ -910,10 +935,11 @@ fn liquidar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult 
         Some(t)
     } else { None };
     let abandonou = |i: usize| abandonos & (1u8 << i) != 0;
-    let venceu = |i: usize| { let do_a = i < p.por_time; (resultado == 1 && do_a) || (resultado == 2 && !do_a) };
+    // Lado do jogador i: 1 = o primeiro (time A), 2 = o segundo (time B)...
+    let venceu = |i: usize| resultado != 0 && i / p.por_time + 1 == resultado as usize;
 
     // 1. Contabilidade: confere cada cofre e a conta de tokens dele e atualiza os saldos
-    let mut bumps = [0u8; 2 * MAX_POR_TIME];
+    let mut bumps = [0u8; MAX_JOGADORES];
     let mut para_pool: u64 = 0;
     for i in 0..p.n {
         let (cofre, tokens) = (&restantes[2 * i], &restantes[2 * i + 1]);
@@ -921,9 +947,9 @@ fn liquidar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult 
         let mut c = ler_cofre(cofre, &p.jogadores[i], Erro::ContasInvalidas)?;
         conferir_tokens_do_cofre(tokens, &p.jogadores[i], c.bump_tokens)?;
         c.travado = c.travado.checked_sub(p.aposta).ok_or(Erro::Overflow)?;
-        // Vencedor: a propria aposta + a do perdedor do par - a taxa do par (taxa_par <= 10% de 2 apostas < 1 aposta)
+        // Vencedor: a propria aposta + uma de cada lado perdedor - a taxa (taxa_v <= 10% de 8 apostas < 1 aposta)
         let ganho = if resultado == 0 { p.aposta }
-            else if venceu(i) { p.aposta.checked_mul(2).and_then(|v| v.checked_sub(taxa_par)).ok_or(Erro::Overflow)? }
+            else if venceu(i) { p.aposta.checked_mul(p.lados as u64).and_then(|v| v.checked_sub(taxa_v)).ok_or(Erro::Overflow)? }
             else { 0 };
         // Quem abandonou nao recebe: a parte dele vai para a pool de abandono
         if abandonou(i) { para_pool = para_pool.checked_add(ganho).ok_or(Erro::Overflow)?; }
@@ -932,32 +958,40 @@ fn liquidar_partida(contas: &[AccountInfo], args: &mut Leitor) -> ProgramResult 
         bumps[i] = c.bump;
     }
     // A taxa e a pool saem do programa: o total guardado diminui
-    let taxa_total = if resultado == 0 { 0 } else { taxa_par.checked_mul(p.por_time as u64).ok_or(Erro::Overflow)? };
+    let taxa_total = taxa_v.checked_mul(p.por_time as u64).ok_or(Erro::Overflow)?; // 0 no empate
     let sai = para_pool.checked_add(taxa_total).ok_or(Erro::Overflow)?;
     if sai > 0 && cfg.com_tetos {
         exigir(config.is_writable(), Erro::ContasInvalidas)?; // com taxa ou abandono a configuracao vem gravavel
         cfg.total_no_cofre = cfg.total_no_cofre.saturating_sub(sai);
         gravar_config(config, &cfg)?;
     }
-    // 2. Tokens: cada perdedor manda a aposta para o vencedor correspondente (times do mesmo tamanho), menos a taxa
-    //    do par, que vai para a carteira de taxas; se esse vencedor abandonou, a aposta inteira vai para a carteira
-    //    de taxas (taxa + pool)
+    // 2. Tokens: o jogador j de cada lado perdedor manda a aposta para o jogador j do lado vencedor (lados do mesmo
+    //    tamanho). O primeiro desses perdedores manda a taxa desse vencedor para a carteira de taxas e o resto para
+    //    ele; os outros mandam a aposta inteira. Se esse vencedor abandonou, tudo vai para a carteira de taxas
+    //    (taxa + pool). Com dois times e o par perdedor -> vencedor de antes.
     if resultado != 0 {
-        let (perdedores, vencedores) = if resultado == 1 { (p.por_time..p.n, 0..p.por_time) } else { (0..p.por_time, p.por_time..p.n) };
-        for (l, w) in perdedores.zip(vencedores) {
-            let b = [bumps[l]];
-            let sementes = [Seed::from(b"cofre"), Seed::from(&p.jogadores[l]), Seed::from(&b)];
-            let (de, autoridade) = (&restantes[2 * l + 1], &restantes[2 * l]);
-            if abandonou(w) {
-                Transfer { from: de, to: taxas.ok_or(Erro::ContasInvalidas)?, authority: autoridade, amount: p.aposta }
+        let lado_vencedor = resultado as usize - 1;
+        for j in 0..p.por_time {
+            let w = lado_vencedor * p.por_time + j;
+            let mut primeiro = true;
+            for lado in (0..p.lados).filter(|&s| s != lado_vencedor) {
+                let l = lado * p.por_time + j;
+                let b = [bumps[l]];
+                let sementes = [Seed::from(b"cofre"), Seed::from(&p.jogadores[l]), Seed::from(&b)];
+                let (de, autoridade) = (&restantes[2 * l + 1], &restantes[2 * l]);
+                let taxa = if primeiro { taxa_v } else { 0 };
+                primeiro = false;
+                if abandonou(w) {
+                    Transfer { from: de, to: taxas.ok_or(Erro::ContasInvalidas)?, authority: autoridade, amount: p.aposta }
+                        .invoke_signed(&[Signer::from(&sementes)])?;
+                    continue;
+                }
+                Transfer { from: de, to: &restantes[2 * w + 1], authority: autoridade, amount: p.aposta.checked_sub(taxa).ok_or(Erro::Overflow)? }
                     .invoke_signed(&[Signer::from(&sementes)])?;
-                continue;
-            }
-            Transfer { from: de, to: &restantes[2 * w + 1], authority: autoridade, amount: p.aposta.checked_sub(taxa_par).ok_or(Erro::Overflow)? }
-                .invoke_signed(&[Signer::from(&sementes)])?;
-            if taxa_par > 0 {
-                Transfer { from: de, to: taxas.ok_or(Erro::ContasInvalidas)?, authority: autoridade, amount: taxa_par }
-                    .invoke_signed(&[Signer::from(&sementes)])?;
+                if taxa > 0 {
+                    Transfer { from: de, to: taxas.ok_or(Erro::ContasInvalidas)?, authority: autoridade, amount: taxa }
+                        .invoke_signed(&[Signer::from(&sementes)])?;
+                }
             }
         }
     }

@@ -144,13 +144,13 @@ describe('cofre', () => {
   });
 
   it('so o arbitro cria partida, dentro do teto e sem jogador repetido', async () => {
-    await falha(program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [bob.publicKey])
+    await falha(program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [bob.publicKey], null)
       .accountsPartial({ arbitro: alice.publicKey }).signers([alice]).rpc(), 'NaoAutorizado');
-    await falha(program.methods.criarPartida(new BN(1), USDC(60), [alice.publicKey], [bob.publicKey])
+    await falha(program.methods.criarPartida(new BN(1), USDC(60), [alice.publicKey], [bob.publicKey], null)
       .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc(), 'ApostaForaDoTeto');
-    await falha(program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [alice.publicKey])
+    await falha(program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [alice.publicKey], null)
       .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc(), 'JogadorRepetido');
-    await program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [bob.publicKey])
+    await program.methods.criarPartida(new BN(1), USDC(5), [alice.publicKey], [bob.publicKey], null)
       .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
   });
 
@@ -203,7 +203,7 @@ describe('cofre', () => {
   });
 
   it('cancelamento devolve as apostas; so o arbitro cancela antes dos prazos', async () => {
-    await program.methods.criarPartida(new BN(2), USDC(3), [alice.publicKey], [bob.publicKey])
+    await program.methods.criarPartida(new BN(2), USDC(3), [alice.publicKey], [bob.publicKey], null)
       .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     const partida = partidaDe(2);
     await program.methods.entrarPartida().accountsPartial({ partida, jogador: alice.publicKey }).signers([alice]).rpc();
@@ -265,7 +265,7 @@ describe('cofre', () => {
   });
 
   it('liquidacao com pagador errado e recusada; o aluguel volta so para quem pagou', async () => {
-    await program.methods.criarPartida(new BN(3), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await program.methods.criarPartida(new BN(3), USDC(1), [alice.publicKey], [bob.publicKey], null).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     const partida = partidaDe(3);
     for (const k of [alice, bob]) await program.methods.entrarPartida().accountsPartial({ partida, jogador: k.publicKey }).signers([k]).rpc();
     await falha(program.methods.liquidarPartida(0, null).accountsPartial({ partida, arbitro: arbitro.publicKey, pagador: bob.publicKey })
@@ -301,7 +301,7 @@ describe('cofre', () => {
     await falha(program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao, dono: bob.publicKey }).signers([bob]).rpc(), 'ContasInvalidas');
     await program.methods.autorizarSessao(chave.publicKey).accountsPartial({ sessao, dono: alice.publicKey }).signers([alice]).rpc();
 
-    await program.methods.criarPartida(new BN(4), USDC(2), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await program.methods.criarPartida(new BN(4), USDC(2), [alice.publicKey], [bob.publicKey], null).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     const partida = partidaDe(4);
     const entrar = (valor: BN, k: anchor.web3.Keypair, cofreAlvo: Chave, s: Chave) => program.methods.entrarPartidaSessao(valor)
       .accountsPartial({ partida, cofre: cofreAlvo, sessao: s, chave: k.publicKey }).signers([k]).rpc();
@@ -331,7 +331,7 @@ describe('cofre', () => {
     await program.methods.revogarSessao().accountsPartial({ sessao, dono: alice.publicKey, quem: chave.publicKey }).signers([chave]).rpc();
     expect(await conn.getAccountInfo(sessao)).to.equal(null);
     expect(await conn.getBalance(alice.publicKey)).to.be.greaterThan(antes); // aluguel de volta para a Alice
-    await program.methods.criarPartida(new BN(5), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await program.methods.criarPartida(new BN(5), USDC(1), [alice.publicKey], [bob.publicKey], null).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     await falha(program.methods.entrarPartidaSessao(USDC(1)).accountsPartial({ partida: partidaDe(5), cofre: cofreDe(alice.publicKey), sessao, chave: chave.publicKey })
       .signers([chave]).rpc(), 'ContasInvalidas');
     // Revogar pela wallet tambem funciona
@@ -353,7 +353,7 @@ describe('cofre', () => {
     await trancar(true, bob);
     expect((await cofre(bob.publicKey)).trancado).to.equal(true);
 
-    await program.methods.criarPartida(new BN(6), USDC(1), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await program.methods.criarPartida(new BN(6), USDC(1), [alice.publicKey], [bob.publicKey], null).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     const entrar = () => program.methods.entrarPartidaSessao(USDC(1))
       .accountsPartial({ partida: partidaDe(6), cofre: cofreDe(bob.publicKey), sessao, chave: chave.publicKey }).signers([chave]).rpc();
     await falha(entrar(), 'SaldoTrancado');
@@ -400,7 +400,7 @@ describe('cofre', () => {
     const jogar = async (id: number, aposta: number, resultado: number, contas: ReturnType<typeof pares>) => {
       // Saldos antes de travar as apostas: o resultado mostra o efeito da partida inteira (perdedor -aposta, vencedor +aposta - taxa)
       const antes = { s: await saldos(), t: await usdc(taxasUsdc), cfg: (await program.account.config.fetch(config)).totalNoCofre.toNumber() };
-      await program.methods.criarPartida(new BN(id), USDC(aposta), [e.publicKey, f.publicKey], [g.publicKey, h.publicKey])
+      await program.methods.criarPartida(new BN(id), USDC(aposta), [e.publicKey, f.publicKey], [g.publicKey, h.publicKey], null)
         .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
       for (const k of [e, f, g, h]) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(id), jogador: k.publicKey }).signers([k]).rpc();
       await program.methods.liquidarPartida(resultado, null).accountsPartial({ partida: partidaDe(id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
@@ -421,7 +421,7 @@ describe('cofre', () => {
     expect(r2.t).to.equal(800_000);
     // Sem taxa (0): a conta de taxas nao vai, e o vencedor leva o pote inteiro
     await program.methods.atualizarConfig(null, null, 0, null, null, null, null).accountsPartial({ config }).rpc();
-    await program.methods.criarPartida(new BN(32), USDC(1), [e.publicKey, f.publicKey], [g.publicKey, h.publicKey])
+    await program.methods.criarPartida(new BN(32), USDC(1), [e.publicKey, f.publicKey], [g.publicKey, h.publicKey], null)
       .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     for (const k of [e, f, g, h]) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(32), jogador: k.publicKey }).signers([k]).rpc();
     await falha(program.methods.liquidarPartida(1, null).accountsPartial({ partida: partidaDe(32), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
@@ -471,7 +471,7 @@ describe('cofre', () => {
     await falha(comprar(alice, new BN(100_000_001)), 'CompraAcimaDoTeto');
     await falha(comprar(alice, new BN(0)), 'ValorInvalido');
     // So o saldo livre: com aposta travada, nao compra alem do livre
-    await program.methods.criarPartida(new BN(40), USDC(3), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    await program.methods.criarPartida(new BN(40), USDC(3), [alice.publicKey], [bob.publicKey], null).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
     await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(40), jogador: alice.publicKey }).signers([alice]).rpc();
     const livre = (await cofre(alice.publicKey)).saldo.toNumber();
     await falha(comprar(alice, new BN(livre + 1)), 'SaldoInsuficiente');
@@ -498,7 +498,7 @@ describe('cofre', () => {
       program.methods.liquidarPartida(resultado, abandonos).accountsPartial({ partida: partidaDe(id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
         .remainingAccounts([...pares([alice.publicKey, bob.publicKey]), ...extra]).signers([arbitro]).rpc();
     const nova = async (id: number, aposta: number) => {
-      await program.methods.criarPartida(new BN(id), USDC(aposta), [alice.publicKey], [bob.publicKey]).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+      await program.methods.criarPartida(new BN(id), USDC(aposta), [alice.publicKey], [bob.publicKey], null).accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
       for (const k of [alice, bob]) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(id), jogador: k.publicKey }).signers([k]).rpc();
     };
     const foto = async () => ({
@@ -542,5 +542,140 @@ describe('cofre', () => {
     expect(depois3.t - antes3.t).to.equal(100_000); // so a taxa
     expect(antes3.tokens - depois3.tokens).to.equal(100_000);
     expect(antes3.total - depois3.total).to.equal(100_000);
+  });
+
+  // ---------- Varios lados (Trap Desert v2: 3 ou 4 jogadores, cada um por si) ----------
+
+  it('varios lados: 3 e 4 jogadores cada um por si (e 3 lados de 2); o vencedor leva o pote menos 5%; pool de abandono igual', async () => {
+    const q = [0, 1, 2, 3, 4, 5, 6, 7].map(() => Keypair.generate());
+    for (const k of q) {
+      await conn.confirmTransaction(await conn.requestAirdrop(k.publicKey, 2 * LAMPORTS_PER_SOL), 'confirmed');
+      ata[k.publicKey.toBase58()] = await createAssociatedTokenAccount(conn, pagador, moeda, k.publicKey);
+      await mintTo(conn, pagador, moeda, ata[k.publicKey.toBase58()], pagador, 20_000_000);
+      await program.methods.abrirCofre().accountsPartial({ dono: k.publicKey, moeda }).signers([k]).rpc();
+      await depositar(k, USDC(20));
+    }
+    const chaves = (lado: anchor.web3.Keypair[]) => lado.map((k) => k.publicKey);
+    // Os dois primeiros lados vao em time_a e time_b; os outros em outros_times (null = so dois lados)
+    const criar = (id: number, aposta: BN, lados: anchor.web3.Keypair[][]) => program.methods
+      .criarPartida(new BN(id), aposta, chaves(lados[0]!), chaves(lados[1]!), lados.length > 2 ? lados.slice(2).map(chaves) : null)
+      .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc();
+    const taxaConta = { pubkey: taxasUsdc, isSigner: false, isWritable: true };
+    const foto = async (ks: anchor.web3.Keypair[]) => ({
+      s: await Promise.all(ks.map(async (k) => (await cofre(k.publicKey)).saldo.toNumber())),
+      tokens: (await Promise.all(ks.map((k) => usdc(tokensDe(k.publicKey))))).reduce((a, b) => a + b, 0),
+      t: await usdc(taxasUsdc), total: (await program.account.config.fetch(config)).totalNoCofre.toNumber(),
+    });
+    // Partida inteira: cria, todos travam, liquida; devolve a variacao de cada um (na ordem da partida) e da carteira de taxas
+    const jogar = async (id: number, aposta: BN, lados: anchor.web3.Keypair[][], resultado: number, abandonos: number | null, comTaxa: boolean) => {
+      const ordem = lados.flat();
+      const antes = await foto(ordem);
+      await criar(id, aposta, lados);
+      for (const k of ordem) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(id), jogador: k.publicKey }).signers([k]).rpc();
+      await program.methods.liquidarPartida(resultado, abandonos).accountsPartial({ partida: partidaDe(id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+        .remainingAccounts([...pares(chaves(ordem)), ...(comTaxa ? [taxaConta] : [])]).signers([arbitro]).rpc();
+      const depois = await foto(ordem);
+      expect(antes.tokens - depois.tokens, 'os tokens acompanham a contabilidade').to.equal(depois.t - antes.t);
+      expect(antes.total - depois.total, 'o total guardado cai so o que saiu').to.equal(depois.t - antes.t);
+      expect(await conn.getAccountInfo(partidaDe(id))).to.equal(null);
+      return { d: depois.s.map((v, i) => v - antes.s[i]!), t: depois.t - antes.t };
+    };
+    const [a, b, c, d, e, f, g, h] = q as anchor.web3.Keypair[] as [anchor.web3.Keypair, anchor.web3.Keypair, anchor.web3.Keypair, anchor.web3.Keypair,
+      anchor.web3.Keypair, anchor.web3.Keypair, anchor.web3.Keypair, anchor.web3.Keypair];
+
+    // Criacao: lados de tamanhos diferentes, mais de 8 jogadores e jogador repetido em outro lado sao recusados
+    await falha(criar(50, USDC(1), [[a], [b], [c, d]]), 'TimesInvalidos');
+    const nove = Array.from({ length: 10 }, () => Keypair.generate());
+    await falha(criar(50, USDC(1), [nove.slice(0, 2), nove.slice(2, 4), nove.slice(4, 6), nove.slice(6, 8), nove.slice(8, 10)]), 'TimesInvalidos');
+    await falha(criar(50, USDC(1), [[a], [b], [c], [a]]), 'JogadorRepetido');
+
+    // 3 jogadores, D$ 2 cada: pote 6, taxa 0,30 (5%), o terceiro lado vence e recebe 6 - 0,30 (ganho de 3,70)
+    const antes51 = await foto([a, b, c]); // antes de travar: a variacao mostra a partida inteira
+    await criar(51, USDC(2), [[a], [b], [c]]);
+    for (const k of [a, b, c]) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(51), jogador: k.publicKey }).signers([k]).rpc();
+    const liquidar51 = (resultado: number, contas: ReturnType<typeof pares>) => program.methods.liquidarPartida(resultado, null)
+      .accountsPartial({ partida: partidaDe(51), arbitro: arbitro.publicKey, pagador: arbitro.publicKey }).remainingAccounts(contas).signers([arbitro]).rpc();
+    await falha(liquidar51(4, [...pares(chaves([a, b, c])), taxaConta]), 'ResultadoInvalido'); // so ha 3 lados
+    await falha(liquidar51(3, pares(chaves([a, b, c]))), 'ContasInvalidas'); // sem a conta de taxas
+    await falha(liquidar51(3, [...pares(chaves([a, b])), taxaConta]), 'ContasInvalidas'); // faltou um jogador
+    const desvio = [...pares(chaves([a, b, c])), { ...taxaConta, pubkey: ata[d.publicKey.toBase58()]! }];
+    await falha(liquidar51(3, desvio), 'CarteiraDeTaxasErrada');
+    await liquidar51(3, [...pares(chaves([a, b, c])), taxaConta]);
+    const depois51 = await foto([a, b, c]);
+    expect(depois51.s.map((v, i) => v - antes51.s[i]!)).to.deep.equal([-2_000_000, -2_000_000, 3_700_000]);
+    expect(depois51.t - antes51.t).to.equal(300_000);
+
+    // 4 jogadores, D$ 1: pote 4, taxa 0,20; o segundo vence (+3 - 0,20)
+    const r4 = await jogar(52, USDC(1), [[a], [b], [c], [d]], 2, null, true);
+    expect(r4.d).to.deep.equal([-1_000_000, 2_800_000, -1_000_000, -1_000_000]);
+    expect(r4.t).to.equal(200_000);
+    // Empate (devolve): todos de volta, sem taxa
+    const r5 = await jogar(53, USDC(1), [[a], [b], [c], [d]], 0, null, false);
+    expect(r5.d).to.deep.equal([0, 0, 0, 0]);
+    expect(r5.t).to.equal(0);
+    // Pool: o vencedor abandonou -> nao recebe nada, o pote inteiro vai para a carteira de taxas (taxa + pool)
+    const r6 = await jogar(54, USDC(1), [[a], [b], [c], [d]], 1, 0b0001, true);
+    expect(r6.d).to.deep.equal([-1_000_000, -1_000_000, -1_000_000, -1_000_000]);
+    expect(r6.t).to.equal(4_000_000);
+    // Um perdedor abandonou: igual a uma derrota normal (so a taxa sai)
+    const r7 = await jogar(55, USDC(1), [[a], [b], [c], [d]], 4, 0b0010, true);
+    expect(r7.d).to.deep.equal([-1_000_000, -1_000_000, -1_000_000, 2_800_000]);
+    expect(r7.t).to.equal(200_000);
+    // Empate com dois abandonos: os dois perdem a aposta para a pool; os outros recebem de volta
+    const r8 = await jogar(56, USDC(1), [[a], [b], [c], [d]], 0, 0b1010, true);
+    expect(r8.d).to.deep.equal([0, -1_000_000, 0, -1_000_000]);
+    expect(r8.t).to.equal(2_000_000);
+    // Todos abandonaram: recusado (sem resultado, o servidor cancela)
+    await criar(57, USDC(1), [[a], [b], [c]]);
+    for (const k of [a, b, c]) await program.methods.entrarPartida().accountsPartial({ partida: partidaDe(57), jogador: k.publicKey }).signers([k]).rpc();
+    await falha(program.methods.liquidarPartida(1, 0b111).accountsPartial({ partida: partidaDe(57), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts([...pares(chaves([a, b, c])), taxaConta]).signers([arbitro]).rpc(), 'AbandonoInvalido');
+    await falha(program.methods.liquidarPartida(1, 0b1000).accountsPartial({ partida: partidaDe(57), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts([...pares(chaves([a, b, c])), taxaConta]).signers([arbitro]).rpc(), 'AbandonoInvalido'); // bit fora da partida
+    // Cancelamento devolve a quem entrou, como nos times
+    await program.methods.cancelarPartida().accountsPartial({ partida: partidaDe(57), quem: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts(chaves([a, b, c]).map((k) => ({ pubkey: cofreDe(k), isSigner: false, isWritable: true }))).signers([arbitro]).rpc();
+    expect((await cofre(a.publicKey)).travado.toNumber()).to.equal(0);
+
+    // Valor quebrado: 3 x 0,333333 = pote 0,999999; taxa 49.999,95 -> 49.999 (para baixo)
+    const r9 = await jogar(58, new BN(333_333), [[a], [b], [c]], 1, null, true);
+    expect(r9.d).to.deep.equal([2 * 333_333 - 49_999, -333_333, -333_333]);
+    expect(r9.t).to.equal(49_999);
+
+    // 3 lados de 2 (6 jogadores), D$ 1: pote 6, taxa 0,30; cada vencedor do terceiro lado recebe 3 - 0,15
+    const r10 = await jogar(59, USDC(1), [[a, b], [c, d], [e, f]], 3, null, true);
+    expect(r10.d).to.deep.equal([-1_000_000, -1_000_000, -1_000_000, -1_000_000, 1_850_000, 1_850_000]);
+    expect(r10.t).to.equal(300_000);
+
+    // O maximo do contrato (8 jogadores): 8 cada um por si e 4x4, cabem numa transacao e no limite de computacao padrao
+    const oito = [[a], [b], [c], [d], [e], [f], [g], [h]];
+    const r11 = await jogar(62, USDC(1), oito, 8, null, true); // pote 8, taxa 0,40
+    expect(r11.d).to.deep.equal([-1, -1, -1, -1, -1, -1, -1, 6.6].map((x) => x * 1_000_000));
+    expect(r11.t).to.equal(400_000);
+    const r12 = await jogar(63, USDC(1), oito, 8, 0b1000_0000, true); // o vencedor abandonou: o pote inteiro vai para a pool
+    expect(r12.d).to.deep.equal(Array(8).fill(-1_000_000));
+    expect(r12.t).to.equal(8_000_000);
+    const r13 = await jogar(64, USDC(1), [[a, b, c, d], [e, f, g, h]], 1, null, true); // 4x4: cada vencedor 1 - 0,10
+    expect(r13.d).to.deep.equal([0.9, 0.9, 0.9, 0.9, -1, -1, -1, -1].map((x) => x * 1_000_000));
+    expect(r13.t).to.equal(400_000);
+  });
+
+  it('formato antigo do servidor (sem outros_times nos dados) continua valendo para 1x1 e times', async () => {
+    // O servidor manda o criar_partida SEM o campo opcional quando a partida tem dois lados (bytes iguais aos de antes)
+    const ix = await program.methods.criarPartida(new BN(60), USDC(1), [alice.publicKey], [bob.publicKey], null)
+      .accounts({ arbitro: arbitro.publicKey }).instruction();
+    expect(ix.data[ix.data.length - 1]).to.equal(0); // o "None" do campo opcional
+    ix.data = ix.data.subarray(0, ix.data.length - 1);
+    await provider.sendAndConfirm(new anchor.web3.Transaction().add(ix), [arbitro]);
+    const p = await program.account.partida.fetch(partidaDe(60));
+    expect(p.jogadores.length).to.equal(2);
+    expect(p.porTime).to.equal(1);
+    await program.methods.cancelarPartida().accountsPartial({ partida: partidaDe(60), quem: arbitro.publicKey, pagador: arbitro.publicKey })
+      .remainingAccounts([]).signers([arbitro]).rpc();
+    // Lixo depois do campo opcional e recusado
+    const ix2 = await program.methods.criarPartida(new BN(61), USDC(1), [alice.publicKey], [bob.publicKey], [[carol.publicKey]])
+      .accounts({ arbitro: arbitro.publicKey }).instruction();
+    ix2.data = Buffer.concat([ix2.data, Buffer.from([0])]);
+    await falha(provider.sendAndConfirm(new anchor.web3.Transaction().add(ix2), [arbitro]));
   });
 });

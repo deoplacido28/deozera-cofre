@@ -314,7 +314,9 @@
     {
       "name": "criar_partida",
       "docs": [
-        "O arbitro cria a partida com os times e o valor por jogador (dentro do teto)."
+        "O arbitro cria a partida com os lados e o valor por jogador (dentro do teto). Dois times: time_a x time_b.",
+        "Varios lados (ex.: 3 ou 4 jogadores cada um por si): time_a e time_b sao os dois primeiros e outros_times os demais.",
+        "Todos os lados com o mesmo tamanho, no maximo 8 jogadores. outros_times e opcional no fim (o servidor antigo nao manda)."
       ],
       "discriminator": [
         60,
@@ -401,6 +403,16 @@
           "name": "time_b",
           "type": {
             "vec": "pubkey"
+          }
+        },
+        {
+          "name": "outros_times",
+          "type": {
+            "option": {
+              "vec": {
+                "vec": "pubkey"
+              }
+            }
           }
         }
       ]
@@ -782,12 +794,13 @@
     {
       "name": "liquidar_partida",
       "docs": [
-        "O arbitro informa o resultado (0 = empate, 1 = time A, 2 = time B) e, se houver, quem ABANDONOU a partida (bit i =",
-        "jogador i). Contas restantes: para CADA jogador, na ordem da partida, o cofre e a conta de tokens dele (2 por jogador);",
-        "por ultimo, se houver taxa (resultado com vencedor e taxa > 0) ou abandono, a conta de tokens da carteira de taxas.",
-        "Cada perdedor perde a aposta; cada vencedor recebe a dele de volta mais a aposta do perdedor correspondente menos a",
-        "taxa (porcentagem das duas apostas do par = do pote). Empate: todos recebem de volta, sem taxa. Pool de abandono:",
-        "quem abandonou nao recebe nada; o que ele receberia vai para a carteira de taxas; os outros recebem o mesmo."
+        "O arbitro informa o resultado (0 = empate/devolve; k = o lado k venceu: 1 = time A, 2 = time B, 3 e 4 = os",
+        "outros_times na ordem) e, se houver, quem ABANDONOU a partida (bit i = jogador i). Contas restantes: para CADA jogador,",
+        "na ordem da partida, o cofre e a conta de tokens dele (2 por jogador); por ultimo, se houver taxa (resultado com",
+        "vencedor e taxa > 0) ou abandono, a conta de tokens da carteira de taxas. Cada perdedor perde a aposta; o jogador j",
+        "do lado vencedor recebe a dele de volta mais a aposta do jogador j de cada lado perdedor menos a taxa (porcentagem",
+        "do pote). Empate: todos recebem de volta, sem taxa. Pool de abandono: quem abandonou nao recebe nada; o que ele",
+        "receberia vai para a carteira de taxas; os outros recebem o mesmo."
       ],
       "discriminator": [
         147,
@@ -1695,7 +1708,10 @@
           },
           {
             "name": "por_time",
-            "type": "u8"
+            "type": "u8",
+            "docs": [
+              "Jogadores por lado. Numero de lados = jogadores / por_time (2 = time A x time B)."
+            ]
           },
           {
             "name": "entrou",
@@ -1730,7 +1746,7 @@
           {
             "name": "jogadores",
             "docs": [
-              "Time A primeiro, depois time B."
+              "Um lado depois do outro: time A, time B e os outros lados, na ordem da criacao."
             ],
             "type": {
               "vec": "pubkey"

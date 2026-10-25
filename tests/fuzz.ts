@@ -1,11 +1,12 @@
 // Teste de ataque aleatorio ("fuzzing") do cofre: sorteia centenas de operacoes, validas e maliciosas, e depois de
 // CADA uma confere as regras que nunca podem quebrar:
 //  1. o saldo de cada cofre (livre + travado) e exatamente o que esta na conta de tokens dele;
-//  2. nada some nem aparece: soma dos cofres = depositado - sacado - taxas das partidas - compras; a carteira de
-//     taxas tem exatamente as taxas cobradas + as compras (saque nao tem taxa);
+//  2. nada some nem aparece: soma dos cofres = depositado - sacado - taxas das partidas (com a pool) - compras; a
+//     carteira de taxas tem exatamente as taxas cobradas + a pool de abandono + as compras (saque nao tem taxa);
 //  3. o travado de cada jogador = soma das apostas das partidas abertas em que ele entrou;
 //  4. o total guardado na configuracao (tetos) = depositado - sacado - taxas;
-//  5. liquidacao paga certo: vencedor +2x aposta - taxa do par (bps das duas apostas), empate devolve, perdedor nada;
+//  5. liquidacao paga certo, com 2 times (1x1, 2x2) ou varios lados (3 e 4 cada um por si): vencedor + (lados - 1)
+//     apostas - taxa (bps de uma aposta por lado), empate devolve, perdedor nada, quem abandonou nada (pool);
 //  6. todo ataque falha (sacar do cofre de outro, apostar no cofre de outro, arbitro falso, chave revogada, desviar
 //     a taxa da partida ou liquidar sem ela...).
 // Rodar: FUZZ=1 PASSOS=400 SEMENTE=7 npm test (scripts/testar.sh). Reproduzivel pela SEMENTE.
@@ -63,11 +64,13 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
   // Modelo: o que o teste sabe que aconteceu (so atualiza quando a operacao deu certo)
   let depositado = 0n;
   let sacado = 0n;
-  let taxasCobradas = 0n;
+  let taxasCobradas = 0n; // taxas das partidas + pool de abandono (tudo que foi para a carteira de taxas nas liquidacoes)
   let compras = 0n; // compras na plataforma (cosmeticos), pagas do saldo livre para a carteira de taxas
   let bps = 500n; // taxa das partidas (pontos-base do pote)
-  const taxaDoPar = (aposta: bigint) => (2n * aposta * bps) / 10_000n;
-  interface PartidaModelo { id: number; a: Par[]; b: Par[]; aposta: bigint; entrou: Set<string>; aberta: boolean }
+  // Taxa de cada vencedor: bps de uma aposta por lado (com 2 lados, a taxa do par perdedor -> vencedor)
+  const taxaDoVencedor = (aposta: bigint, lados: number) => (BigInt(lados) * aposta * bps) / 10_000n;
+  // lados: 2 times (1x1, 2x2) ou varios lados (3 ou 4 jogadores cada um por si); jogadores na ordem da partida = lados.flat()
+  interface PartidaModelo { id: number; lados: Par[][]; aposta: bigint; entrou: Set<string>; aberta: boolean }
   const partidas: PartidaModelo[] = [];
   let proximoId = 1;
   const contagem = { ok: 0, recusadas: 0, ataques: 0 };
@@ -175,20 +178,23 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
         await tentar(program.methods.trancarSaldo(rng() < 0.5).accountsPartial({ cofre: cofreDe(k.publicKey), dono: k.publicKey }).signers([k]).rpc());
       } else if (r < 0.50) {
         op = 'criar partida';
-        const porTime = sorteia([1, 1, 2])!;
+        // [jogadores por lado, lados]: 1x1, 2x2, 3 e 4 cada um por si; [2, 1] e [1, 3] com um lado maior (invalidos)
+        const [porTime, nLados, valido] = sorteia([[1, 2, true], [1, 2, true], [2, 2, true], [1, 3, true], [1, 4, true], [1, 3, false]] as const)!;
         const mistura = [...jogadores].sort(() => rng() - 0.5);
-        const a = mistura.slice(0, porTime);
-        const b = mistura.slice(porTime, 2 * porTime);
+        const lados = Array.from({ length: nLados }, (_, s) => mistura.slice(s * porTime, (s + 1) * porTime));
+        if (!valido) lados[nLados - 1]!.push(mistura[3]!); // o ultimo lado com 2 jogadores
         const aposta = BigInt(sorteia([1, 2, 5, 10, 60])! * 1_000_000); // 60 passa do teto de 50: deve falhar
         const id = proximoId++;
-        const ok = await tentar(program.methods.criarPartida(new BN(id), new BN(aposta.toString()), a.map((x) => x.publicKey), b.map((x) => x.publicKey))
+        const chaves = lados.map((l) => l.map((x) => x.publicKey));
+        const ok = await tentar(program.methods.criarPartida(new BN(id), new BN(aposta.toString()), chaves[0]!, chaves[1]!, nLados > 2 ? chaves.slice(2) : null)
           .accounts({ arbitro: arbitro.publicKey }).signers([arbitro]).rpc());
-        if (ok) partidas.push({ id, a, b, aposta, entrou: new Set(), aberta: true });
+        if (ok) expect(valido, 'passo ' + passo + ': criou partida com lados de tamanhos diferentes').to.equal(true);
+        if (ok) partidas.push({ id, lados, aposta, entrou: new Set(), aberta: true });
       } else if (r < 0.66) {
         op = 'entrar na partida';
         const p = sorteia(abertas());
         if (p) {
-          const j = sorteia([...p.a, ...p.b])!;
+          const j = sorteia(p.lados.flat())!;
           const lista = sessoes.get(id58(j))!;
           let ok: boolean;
           if (rng() < 0.6 && lista.length) {
@@ -208,32 +214,43 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
         op = 'liquidar';
         const p = sorteia(abertas());
         if (p) {
-          const resultado = sorteia([0, 1, 2])!;
-          const ordem = [...p.a, ...p.b];
+          const nLados = p.lados.length;
+          const porTime = p.lados[0]!.length;
+          const resultado = inteiro(0, nLados + (rng() < 0.1 ? 1 : 0)); // as vezes um lado que nao existe: deve falhar
+          const ordem = p.lados.flat();
+          // Abandono (pool): as vezes alguns jogadores (raramente todos, que deve falhar)
+          const abandonos = rng() < 0.3 ? inteiro(1, (1 << ordem.length) - 1) : 0;
+          const abandonou = (i: number) => (abandonos & (1 << i)) !== 0;
           const antes = await Promise.all(ordem.map((x) => cofre(x.publicKey)));
           const contas = ordem.flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
-          const taxa = resultado === 0 ? 0n : taxaDoPar(p.aposta);
-          if (taxa > 0n) contas.push({ pubkey: taxasUsdc, isSigner: false, isWritable: true });
-          const ok = await tentar(program.methods.liquidarPartida(resultado, null)
+          const taxa = resultado === 0 ? 0n : taxaDoVencedor(p.aposta, nLados);
+          if (taxa > 0n || abandonos) contas.push({ pubkey: taxasUsdc, isSigner: false, isWritable: true });
+          const ok = await tentar(program.methods.liquidarPartida(resultado, abandonos ? abandonos : null)
             .accountsPartial({ partida: partidaDe(p.id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
             .remainingAccounts(contas).signers([arbitro]).rpc());
           if (ok) {
             expect(p.entrou.size, 'passo ' + passo + ': liquidou partida que nao estava travada por todos').to.equal(ordem.length);
+            expect(resultado <= nLados, 'passo ' + passo + ': aceitou vencedor de um lado que nao existe').to.equal(true);
+            expect(abandonos !== (1 << ordem.length) - 1, 'passo ' + passo + ': aceitou todos abandonando').to.equal(true);
             p.aberta = false;
-            taxasCobradas += taxa * BigInt(p.a.length);
             const depois = await Promise.all(ordem.map((x) => cofre(x.publicKey)));
+            let pool = 0n;
             ordem.forEach((x, i) => {
-              const doA = i < p.a.length;
-              const ganho = resultado === 0 ? p.aposta : (resultado === 1) === doA ? 2n * p.aposta - taxa : 0n;
+              const venceu = resultado !== 0 && Math.floor(i / porTime) + 1 === resultado;
+              const devido = resultado === 0 ? p.aposta : venceu ? BigInt(nLados) * p.aposta - taxa : 0n;
+              const ganho = abandonou(i) ? 0n : devido; // quem abandonou nao recebe: vai para a pool
+              if (abandonou(i)) pool += devido;
               expect(depois[i]!.saldo - antes[i]!.saldo, 'passo ' + passo + ': pagamento errado para ' + nome(x)).to.equal(ganho);
             });
+            // Taxa (um por vencedor) e pool saem para a carteira de taxas
+            taxasCobradas += taxa * BigInt(porTime) + pool;
           }
         }
       } else if (r < 0.82) {
         op = 'cancelar';
         const p = sorteia(abertas());
         if (p) {
-          const entraram = [...p.a, ...p.b].filter((x) => p.entrou.has(id58(x)));
+          const entraram = p.lados.flat().filter((x) => p.entrou.has(id58(x)));
           const ok = await tentar(program.methods.cancelarPartida()
             .accountsPartial({ partida: partidaDe(p.id), quem: arbitro.publicKey, pagador: arbitro.publicKey })
             .remainingAccounts(entraram.map((x) => ({ pubkey: cofreDe(x.publicKey), isSigner: false, isWritable: true }))).signers([arbitro]).rpc());
@@ -271,7 +288,7 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
             const minha = Keypair.generate();
             await tentar(program.methods.autorizarSessao(minha.publicKey)
               .accountsPartial({ sessao: sessaoDe(atacante.publicKey, minha.publicKey), dono: atacante.publicKey }).signers([atacante]).rpc());
-            const alvo = sorteia([...p.a, ...p.b])!;
+            const alvo = sorteia(p.lados.flat())!;
             await deveFalhar('apostar no cofre de outro com a propria chave', program.methods.entrarPartidaSessao(new BN(p.aposta.toString())).accountsPartial({
               partida: partidaDe(p.id), cofre: cofreDe(alvo.publicKey), sessao: sessaoDe(atacante.publicKey, minha.publicKey), chave: minha.publicKey,
             }).signers([minha]).rpc());
@@ -279,14 +296,14 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
         } else if (tipo === 3) {
           const p = sorteia(abertas());
           if (p) {
-            const contas = [...p.a, ...p.b].flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
+            const contas = p.lados.flat().flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
             await deveFalhar('liquidar como arbitro falso', program.methods.liquidarPartida(1, null)
               .accountsPartial({ partida: partidaDe(p.id), arbitro: atacante.publicKey, pagador: arbitro.publicKey })
               .remainingAccounts(contas).signers([atacante]).rpc());
           }
         } else if (tipo === 4) {
           const rev = sorteia(revogadas);
-          const p = rev ? abertas().find((x) => [...x.a, ...x.b].includes(rev.dono) && !x.entrou.has(id58(rev.dono))) : undefined;
+          const p = rev ? abertas().find((x) => x.lados.flat().includes(rev.dono) && !x.entrou.has(id58(rev.dono))) : undefined;
           if (rev && p) {
             await deveFalhar('apostar com chave revogada', program.methods.entrarPartidaSessao(new BN(p.aposta.toString())).accountsPartial({
               partida: partidaDe(p.id), cofre: cofreDe(rev.dono.publicKey), sessao: sessaoDe(rev.dono.publicKey, rev.chave.publicKey), chave: rev.chave.publicKey,
@@ -299,10 +316,10 @@ describe('cofre: ataque aleatorio (fuzzing)', function () {
         } else if (tipo === 7 || tipo === 8) {
           // Liquidacao com vencedor feita pelo arbitro de verdade, mas desviando a taxa (para o atacante ou para o
           // proprio vencedor) ou sem a conta da carteira de taxas: tem de falhar
-          const p = abertas().find((x) => x.entrou.size === x.a.length + x.b.length);
+          const p = abertas().find((x) => x.entrou.size === x.lados.flat().length);
           if (p && bps > 0n) {
-            const contas = [...p.a, ...p.b].flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
-            if (tipo === 7) contas.push({ pubkey: sorteia([ata.get(id58(atacante))!, tokensDe(p.a[0]!.publicKey), ata.get(id58(p.a[0]!))!])!, isSigner: false, isWritable: true });
+            const contas = p.lados.flat().flatMap((x) => [cofreDe(x.publicKey), tokensDe(x.publicKey)]).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true }));
+            if (tipo === 7) contas.push({ pubkey: sorteia([ata.get(id58(atacante))!, tokensDe(p.lados[0]![0]!.publicKey), ata.get(id58(p.lados[0]![0]!))!])!, isSigner: false, isWritable: true });
             await deveFalhar(tipo === 7 ? 'desviar a taxa da partida' : 'liquidar com vencedor sem a conta de taxas', program.methods.liquidarPartida(1, null)
               .accountsPartial({ partida: partidaDe(p.id), arbitro: arbitro.publicKey, pagador: arbitro.publicKey })
               .remainingAccounts(contas).signers([arbitro]).rpc());
