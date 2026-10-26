@@ -10,7 +10,7 @@ cargo build-sbf --manifest-path programs/cofre/Cargo.toml
 LEDGER=$(mktemp -d)
 # Publicado como atualizavel, com a carteira local como autoridade (o inicializar exige isso, igual a devnet)
 solana-test-validator --ledger "$LEDGER" --reset --quiet --bind-address 127.0.0.1 --rpc-port 8899 \
-  --upgradeable-program E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX target/deploy/cofre.so ~/.config/solana/id.json &
+  --upgradeable-program HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n target/deploy/cofre.so ~/.config/solana/id.json &
 VALIDADOR=$!
 # Desliga a rede local no fim sem trocar o resultado dos testes (o "wait" devolve 143 = processo encerrado)
 trap 'r=$?; kill $VALIDADOR 2>/dev/null; wait $VALIDADOR 2>/dev/null || true; rm -rf "$LEDGER"; exit $r' EXIT

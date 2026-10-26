@@ -6,8 +6,8 @@ O código está público para que qualquer pessoa confira **o que o programa faz
 
 | Rede | Endereço do programa |
 |---|---|
-| Devnet (testes) | `E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX` (roda o build verificável: hash `549e42d27f1bdf713b19732eb6668e88785003379a15d3643782f740a75f8f6e`) |
-| Mainnet | ainda não publicado |
+| Mainnet | `HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n` (roda o build verificável; o hash fica na versão `build-<commit>` e no resumo do Actions) |
+| Devnet (testes, versão anterior) | `E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX` |
 
 ## O que o programa garante
 - **Saque:** só o dono do cofre saca, e só para uma conta dele. O saque funciona até com o programa pausado.
@@ -31,7 +31,7 @@ Para conferir por conta própria (precisa de Docker e Rust):
 cargo install solana-verify --locked
 solana-verify build --library-name cofre --base-image solanafoundation/solana-verifiable-build:2.1.21
 solana-verify get-executable-hash target/deploy/cofre.so
-solana-verify get-program-hash -u https://api.devnet.solana.com E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX
+solana-verify get-program-hash -u https://api.mainnet-beta.solana.com HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n
 ```
 
 Se os dois hashes forem iguais, o programa da rede é exatamente o deste código.

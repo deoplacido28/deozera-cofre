@@ -46,7 +46,7 @@ use pinocchio::{
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer as TransferirSol};
 use pinocchio_token::instructions::{CloseAccount, InitializeAccount3, Transfer};
 
-pinocchio_pubkey::declare_id!("E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX");
+pinocchio_pubkey::declare_id!("HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n");
 
 program_entrypoint!(processar);
 no_allocator!();

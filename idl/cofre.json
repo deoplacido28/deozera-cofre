@@ -1,5 +1,5 @@
 {
-  "address": "E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX",
+  "address": "HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n",
   "metadata": {
     "name": "cofre",
     "version": "0.4.0",
@@ -756,7 +756,7 @@
         },
         {
           "name": "programa",
-          "address": "E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX"
+          "address": "HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n"
         },
         {
           "name": "dados_programa"

@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      PROGRAMA_DEVNET: E2zft5kPUBFgwbJYLSLMdx92TDT4Ajyddtczg3ByJ3XX
+      PROGRAMA_MAINNET: HMPj2NkqVJJUpjg4TxMjCfDCc8NLSUV5VN32DRzzy25n
       IMAGEM: solanafoundation/solana-verifiable-build:2.1.21
       SOLANA_VERIFY: 0.5.2
     steps:
@@ -40,11 +40,11 @@ jobs:
             echo "- Tamanho: $TAMANHO bytes"
             echo "- Contato de seguranca (security.txt) embutido: sim"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Comparar com a devnet
+      - name: Comparar com a mainnet
         run: |
-          REDE=$(solana-verify get-program-hash -u https://api.devnet.solana.com "$PROGRAMA_DEVNET" || echo "erro ao ler")
-          if [ "$REDE" = "${{ steps.hash.outputs.hash }}" ]; then R="IGUAL: o programa da devnet e exatamente este codigo"; else R="diferente (a devnet ainda roda outra versao)"; fi
-          echo "- Devnet (\`$PROGRAMA_DEVNET\`): \`$REDE\` → $R" >> "$GITHUB_STEP_SUMMARY"
+          REDE=$(solana-verify get-program-hash -u https://api.mainnet-beta.solana.com "$PROGRAMA_MAINNET" || echo "erro ao ler")
+          if [ "$REDE" = "${{ steps.hash.outputs.hash }}" ]; then R="IGUAL: o programa da mainnet e exatamente este codigo"; else R="diferente (a mainnet ainda roda outra versao ou nao foi publicada)"; fi
+          echo "- Mainnet (\`$PROGRAMA_MAINNET\`): \`$REDE\` → $R" >> "$GITHUB_STEP_SUMMARY"
           echo "$R"
       - uses: actions/upload-artifact@v4
         with:
