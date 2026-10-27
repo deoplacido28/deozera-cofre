@@ -1,14 +1,14 @@
 # Política de segurança
 
-Obrigado por ajudar a manter a DeoZERA segura. Se você encontrou uma falha, conte para a gente antes de qualquer outra pessoa.
+Obrigado por ajudar a manter o DOPAlab seguro. Se você encontrou uma falha, conte para a gente antes de qualquer outra pessoa.
 
 ## Contato
-- E-mail: **contato@deozera.com.br** (assunto começando com `[SEGURANCA]`)
+- E-mail: **contato@dopalab.com.br** (assunto começando com `[SEGURANCA]`)
 - Idiomas: português ou inglês
 
 ## Escopo
 - Este programa Solana (`programs/cofre`), em qualquer rede onde ele estiver publicado.
-- O site [deozera.com.br](https://deozera.com.br) e a forma como ele monta as transações para a carteira.
+- O site [dopalab.com.br](https://dopalab.com.br) e a forma como ele monta as transações para a carteira.
 
 ## O que mandar
 - O que a falha permite fazer (por exemplo: mover saldo de outra pessoa, travar fundos, burlar a taxa).

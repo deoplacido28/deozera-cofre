@@ -1,6 +1,6 @@
-# Cofre DeoZERA
+# Cofre DOPAlab
 
-Programa Solana que guarda os saldos (em USDC) dos jogadores da [DeoZERA](https://deozera.com.br) e trava as apostas das partidas. Escrito em Rust com [Pinocchio](https://github.com/anza-xyz/pinocchio).
+Programa Solana que guarda os saldos (em USDC) dos jogadores do [DOPAlab](https://dopalab.com.br) e trava as apostas das partidas. Escrito em Rust com [Pinocchio](https://github.com/anza-xyz/pinocchio).
 
 O código está público para que qualquer pessoa confira **o que o programa faz** e **que o programa rodando na Solana é exatamente este código** (build verificável, abaixo).
 

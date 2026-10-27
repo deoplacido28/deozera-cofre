@@ -58,10 +58,10 @@ no_allocator!();
 #[no_mangle]
 pub static security_txt: &str = concat!(
     "=======BEGIN SECURITY.TXT V1=======\0",
-    "name\0", "DeoZERA - Cofre\0",
-    "project_url\0", "https://deozera.com.br\0",
-    "contacts\0", "email:contato@deozera.com.br\0",
-    "policy\0", "https://deozera.com.br/seguranca\0",
+    "name\0", "DOPAlab - Cofre\0",
+    "project_url\0", "https://dopalab.com.br\0",
+    "contacts\0", "email:contato@dopalab.com.br\0",
+    "policy\0", "https://dopalab.com.br/seguranca\0",
     "preferred_languages\0", "pt,en\0",
     "source_code\0", "https://github.com/deoplacido28/deozera-cofre\0",
     "=======END SECURITY.TXT V1=======\0",
